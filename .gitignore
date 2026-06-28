@@ -1,0 +1,6 @@
+.claude/
+gk-mcp-key.pem
+*.pem
+mcp-publisher
+mcp-publisher_*.tar.gz
+specs/

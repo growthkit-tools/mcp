@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "tools.growthkit/revenue-intelligence",
+  "title": "GrowthKit Revenue Intelligence",
+  "description": "Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.",
+  "version": "1.0.1",
+  "websiteUrl": "https://growthkit.tools/en/mcp",
+  "repository": {
+    "url": "https://github.com/growthkit-tools/mcp",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.growthkit.tools"
+    }
+  ]
+}

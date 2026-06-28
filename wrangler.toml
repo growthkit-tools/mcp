@@ -1,0 +1,11 @@
+name = "growthkit-mcp"
+main = "index.js"
+compatibility_date = "2024-12-01"
+
+[vars]
+SUPABASE_URL = "https://didxfvswnrpgrysmoabx.supabase.co"
+LOG_LEVEL = "info"
+
+[[kv_namespaces]]
+binding = "DEMO_RL"
+id = "098e24b7a3544cbf805f899e0a597f7a"
