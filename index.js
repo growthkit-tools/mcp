@@ -794,7 +794,7 @@ export default {
               properties: {
                 limit: { type: "integer", description: "Max results. Default: 50." },
                 offset: { type: "integer", description: "Pagination offset. Default: 0." },
-                metadata_filter: { type: "object", additionalProperties: { type: "string" } },
+                metadata_filter: { type: "object", description: "Optional metadata filters. Use chapter to list within a specific chapter.", additionalProperties: { type: "string" } },
               },
             },
           },
@@ -808,7 +808,7 @@ export default {
               properties: {
                 embedding_id: { type: "string", description: "ID of the memory to update." },
                 new_content: { type: "string", description: "Updated text content." },
-                new_metadata: { type: "object", additionalProperties: { type: "string" } },
+                new_metadata: { type: "object", description: "Optional metadata to replace, e.g. chapter or tags.", additionalProperties: { type: "string" } },
                 change_reason: { type: "string", description: "REQUIRED: Why this memory is being updated, e.g. 'Added Q2 metrics', 'Fixed company name', 'User requested update'. Stored in audit log." },
               },
             },
@@ -821,7 +821,7 @@ export default {
               type: "object",
               required: ["embedding_ids", "change_reason"],
               properties: {
-                embedding_ids: { type: "array", items: { type: "string" } },
+                embedding_ids: { type: "array", description: "IDs of the memories to delete (from searchMemory/listMemories).", items: { type: "string" } },
                 change_reason: { type: "string", description: "REQUIRED: Why these memories are being deleted, e.g. 'Outdated', 'Duplicate', 'User requested cleanup'. Stored in audit log." },
               },
             },
@@ -844,7 +844,7 @@ export default {
             description: "Count memories, optionally filtered by chapter via metadata_filter.chapter.",
             inputSchema: {
               type: "object",
-              properties: { metadata_filter: { type: "object", additionalProperties: { type: "string" } } },
+              properties: { metadata_filter: { type: "object", description: "Optional metadata filters. Use chapter to count within a specific chapter.", additionalProperties: { type: "string" } } },
             },
           },
           {
@@ -864,11 +864,11 @@ export default {
                 file_base64: { type: "string", description: "Base64-encoded file content." },
                 filename: { type: "string", description: "Filename with extension." },
                 mime_type: { type: "string", description: "MIME type." },
-                category: { type: "string", enum: ["battlecards", "reports", "uploads", "exports", "templates", "presentations"] },
-                title: { type: "string" },
-                description: { type: "string" },
-                chapter: { type: "string" },
-                extract_insights: { type: "boolean" },
+                category: { type: "string", enum: ["battlecards", "reports", "uploads", "exports", "templates", "presentations"], description: "Optional storage category." },
+                title: { type: "string", description: "Optional document title. Defaults to the filename." },
+                description: { type: "string", description: "Optional short description of the document." },
+                chapter: { type: "string", description: "Optional memory chapter to associate extracted insights with." },
+                extract_insights: { type: "boolean", description: "If true, extract text and embed insights into memory. Default: false." },
               },
             },
           },
@@ -879,10 +879,10 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                category: { type: "string" },
-                chapter: { type: "string" },
-                limit: { type: "integer" },
-                offset: { type: "integer" },
+                category: { type: "string", description: "Optional: filter by storage category." },
+                chapter: { type: "string", description: "Optional: filter by associated memory chapter." },
+                limit: { type: "integer", description: "Max results. Default: 50." },
+                offset: { type: "integer", description: "Pagination offset. Default: 0." },
               },
             },
           },
@@ -893,7 +893,7 @@ export default {
             inputSchema: {
               type: "object",
               required: ["document_id"],
-              properties: { document_id: { type: "string" } },
+              properties: { document_id: { type: "string", description: "ID of the document (from listDocuments)." } },
             },
           },
           {
@@ -903,7 +903,7 @@ export default {
             inputSchema: {
               type: "object",
               required: ["document_id"],
-              properties: { document_id: { type: "string" } },
+              properties: { document_id: { type: "string", description: "ID of the document to delete (from listDocuments)." } },
             },
           },
           {
@@ -914,12 +914,12 @@ export default {
               type: "object",
               required: ["title", "remind_at"],
               properties: {
-                title: { type: "string" },
-                description: { type: "string" },
-                remind_at: { type: "string" },
-                repeat: { type: "string", enum: ["none", "daily", "weekly", "monthly"] },
-                channel: { type: "string", enum: ["email", "slack", "webhook"] },
-                channel_target: { type: "string" },
+                title: { type: "string", description: "Short reminder title." },
+                description: { type: "string", description: "Optional reminder details." },
+                remind_at: { type: "string", description: "When to remind, ISO 8601 (convert relative times first)." },
+                repeat: { type: "string", enum: ["none", "daily", "weekly", "monthly"], description: "Repeat interval: none | daily | weekly | monthly. Default: none." },
+                channel: { type: "string", enum: ["email", "slack", "webhook"], description: "Delivery channel: email | slack | webhook." },
+                channel_target: { type: "string", description: "Optional channel target, e.g. email address or webhook URL." },
                 task_id: { type: "string", description: "Optional: link this reminder to a task (task UUID). Linked reminders are auto-cancelled when the task is marked done/dropped." },
               },
             },
@@ -931,8 +931,8 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                status: { type: "string", enum: ["pending", "sent", "cancelled", "all"] },
-                limit: { type: "integer" },
+                status: { type: "string", enum: ["pending", "sent", "cancelled", "all"], description: "Filter by status: pending | sent | cancelled | all. Default: pending." },
+                limit: { type: "integer", description: "Max results. Default: 50." },
                 task_id: { type: "string", description: "Optional: only reminders linked to this task." },
               },
             },
@@ -944,7 +944,7 @@ export default {
             inputSchema: {
               type: "object",
               required: ["reminder_id"],
-              properties: { reminder_id: { type: "string" } },
+              properties: { reminder_id: { type: "string", description: "ID of the pending reminder to cancel (from listReminders)." } },
             },
           },
           // === NEW: Memory Versioning Tools ===
@@ -1125,6 +1125,7 @@ export default {
     properties: {
       filter: {
         type: "object",
+        description: "Filter object. All fields optional.",
         properties: {
           job_title: {
             type: "object",
@@ -1206,9 +1207,9 @@ export default {
           description: "Update a deal. Use generic names: company_id, contact_id, expected_close.",
           inputSchema: { type: "object", required: ["id"], properties: {
             id: { type: "string", description: "Deal ID." },
-            stage_id: { type: "string" },
-            value: { type: "number" },
-            title: { type: "string" },
+            stage_id: { type: "string", description: "Optional new stage ID (from crmGetPipelines)." },
+            value: { type: "number", description: "Optional new deal value." },
+            title: { type: "string", description: "Optional new deal title." },
             expected_close: { type: "string", description: "Expected close date YYYY-MM-DD." },
           }},
         },
@@ -1226,9 +1227,9 @@ export default {
           description: "Add a note to a deal, company, or contact.",
           inputSchema: { type: "object", required: ["content"], properties: {
             content: { type: "string", description: "Note text — supports HTML." },
-            deal_id: { type: "string" },
-            company_id: { type: "string" },
-            contact_id: { type: "string" },
+            deal_id: { type: "string", description: "Optional deal ID to attach the note to." },
+            company_id: { type: "string", description: "Optional company ID to attach the note to." },
+            contact_id: { type: "string", description: "Optional contact ID to attach the note to." },
           }},
         },
         {
@@ -1238,11 +1239,11 @@ export default {
           inputSchema: { type: "object", required: ["subject"], properties: {
             subject: { type: "string", description: "Activity subject." },
             type: { type: "string", enum: ["call", "meeting", "task", "email", "deadline"], description: "Activity type. Default: task." },
-            deal_id: { type: "string" },
-            company_id: { type: "string" },
-            contact_id: { type: "string" },
+            deal_id: { type: "string", description: "Optional deal ID to link the activity to." },
+            company_id: { type: "string", description: "Optional company ID to link the activity to." },
+            contact_id: { type: "string", description: "Optional contact ID to link the activity to." },
             due_date: { type: "string", description: "Due date YYYY-MM-DD." },
-            note: { type: "string" },
+            note: { type: "string", description: "Optional note/body for the activity." },
           }},
         },
         {
@@ -1266,9 +1267,9 @@ export default {
           title: "Enrich Person",
           description: "Get person profile from email or LinkedIn URL.",
           inputSchema: { type: "object", properties: {
-            email: { type: "string" },
-            linkedin_url: { type: "string" },
-            linkedin_handle: { type: "string" },
+            email: { type: "string", description: "Person's email address." },
+            linkedin_url: { type: "string", description: "Full LinkedIn profile URL." },
+            linkedin_handle: { type: "string", description: "LinkedIn handle/slug (without the full URL)." },
           }},
         },
         {
@@ -1276,8 +1277,8 @@ export default {
           title: "Find Contacts",
           description: "Find contacts at a company. Filter by seniority or department.",
           inputSchema: { type: "object", properties: {
-            domain: { type: "string" },
-            company: { type: "string" },
+            domain: { type: "string", description: "Company domain to find contacts at." },
+            company: { type: "string", description: "Company name (if domain unknown)." },
             seniority: { type: "string", description: "junior, senior, or executive." },
             department: { type: "string", description: "sales, marketing, it, etc." },
             limit: { type: "integer", description: "Max results. Default: 10." },
@@ -1288,11 +1289,11 @@ export default {
           title: "Find Email",
           description: "Find one person's email by name + domain.",
           inputSchema: { type: "object", properties: {
-            domain: { type: "string" },
-            company: { type: "string" },
-            first_name: { type: "string" },
-            last_name: { type: "string" },
-            full_name: { type: "string" },
+            domain: { type: "string", description: "Company domain to search the email at." },
+            company: { type: "string", description: "Company name (if domain unknown)." },
+            first_name: { type: "string", description: "Person's first name." },
+            last_name: { type: "string", description: "Person's last name." },
+            full_name: { type: "string", description: "Full name (alternative to first_name + last_name)." },
           }},
         },
         {
@@ -1300,7 +1301,7 @@ export default {
           title: "Verify Email",
           description: "Check if an email is deliverable. Use before outreach.",
           inputSchema: { type: "object", required: ["email"], properties: {
-            email: { type: "string" },
+            email: { type: "string", description: "Email address to verify for deliverability." },
           }},
         },
         // Lead Scoring Tools (Phase 1b)
@@ -1425,20 +1426,20 @@ export default {
             required: ["name", "icp_snapshot", "persona_snapshot", "offer", "pain_hypothesis", "messaging_angle", "channels", "start_date", "success_metric"],
             properties: {
               name: { type: "string", description: "Short campaign label, 3-200 chars. Include strategic axis (e.g. 'Q2-DACH-Maschinenbau-EU-AI-Act')." },
-              description: { type: "string" },
+              description: { type: "string", description: "Optional free-text summary of the campaign." },
               product_snapshot: { type: "object", description: "Frozen product info at creation time. Schema: { name, description, value_props[], differentiators[], pricing_hint }." },
               icp_snapshot: { type: "object", description: "Frozen ICP at creation time. May be a NARROWED variant of the user's global ICP." },
               persona_snapshot: { type: "object", description: "Frozen target persona for this campaign." },
               offer: { type: "string", description: "The concrete CTA, NOT the product name. E.g. 'Free 30-day pilot', not 'Buy GrowthKit'." },
               pain_hypothesis: { type: "string", description: "ONE sentence stating the specific pain this campaign assumes the persona has." },
               messaging_angle: { type: "string", description: "The hook in the first email/message. The news/trend/insight that earns the read." },
-              channels: { type: "array", items: { type: "string", enum: ["email", "linkedin", "event", "paid", "cold_call", "referral", "webinar"] } },
+              channels: { type: "array", description: "Outreach channels for this campaign: email | linkedin | event | paid | cold_call | referral | webinar.", items: { type: "string", enum: ["email", "linkedin", "event", "paid", "cold_call", "referral", "webinar"] } },
               start_date: { type: "string", description: "ISO date YYYY-MM-DD." },
               end_date: { type: "string", description: "Optional ISO date YYYY-MM-DD. Null = open-ended." },
               success_metric: { type: "object", description: "{ type: 'replies'|'demos'|'sqls'|'pipeline_eur', target: number }" },
               briefing_source: { type: "string", enum: ["wizard", "upload", "manual"], description: "Default 'wizard'." },
               source_document_id: { type: "string", description: "Optional documents.id if briefing was parsed from upload." },
-              notes: { type: "string" },
+              notes: { type: "string", description: "Optional internal notes about the campaign." },
             },
           },
         },
@@ -1449,7 +1450,7 @@ export default {
           inputSchema: {
             type: "object",
             properties: {
-              status: { type: "string", enum: ["draft", "active", "paused", "completed", "archived"] },
+              status: { type: "string", enum: ["draft", "active", "paused", "completed", "archived"], description: "Optional: filter by status: draft | active | paused | completed | archived." },
               limit: { type: "integer", description: "Default 25, max 100." },
             },
           },
@@ -1461,7 +1462,7 @@ export default {
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
-            properties: { campaign_id: { type: "string" } },
+            properties: { campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." } },
           },
         },
         {
@@ -1472,20 +1473,20 @@ export default {
             type: "object",
             required: ["campaign_id"],
             properties: {
-              campaign_id: { type: "string" },
-              name: { type: "string" },
-              offer: { type: "string" },
-              pain_hypothesis: { type: "string" },
-              messaging_angle: { type: "string" },
-              channels: { type: "array", items: { type: "string" } },
-              start_date: { type: "string" },
-              end_date: { type: "string" },
-              success_metric: { type: "object" },
-              status: { type: "string", enum: ["draft", "active", "paused", "completed", "archived"] },
-              icp_snapshot: { type: "object" },
-              persona_snapshot: { type: "object" },
-              product_snapshot: { type: "object" },
-              notes: { type: "string" },
+              campaign_id: { type: "string", description: "ID of the campaign to update (from listCampaigns)." },
+              name: { type: "string", description: "Short campaign label, 3-200 chars." },
+              offer: { type: "string", description: "The concrete CTA, NOT the product name. E.g. 'Free 30-day pilot'." },
+              pain_hypothesis: { type: "string", description: "ONE sentence stating the specific pain this campaign assumes the persona has." },
+              messaging_angle: { type: "string", description: "The hook in the first email/message — the news/trend/insight that earns the read." },
+              channels: { type: "array", description: "Outreach channels for this campaign.", items: { type: "string" } },
+              start_date: { type: "string", description: "ISO date YYYY-MM-DD." },
+              end_date: { type: "string", description: "Optional ISO date YYYY-MM-DD. Null = open-ended." },
+              success_metric: { type: "object", description: "{ type: 'replies'|'demos'|'sqls'|'pipeline_eur', target: number }" },
+              status: { type: "string", enum: ["draft", "active", "paused", "completed", "archived"], description: "Campaign status: draft | active | paused | completed | archived." },
+              icp_snapshot: { type: "object", description: "Frozen ICP for this campaign. May be a narrowed variant of the global ICP." },
+              persona_snapshot: { type: "object", description: "Frozen target persona for this campaign." },
+              product_snapshot: { type: "object", description: "Frozen product info. Schema: { name, description, value_props[], differentiators[], pricing_hint }." },
+              notes: { type: "string", description: "Optional internal notes about the campaign." },
             },
           },
         },
@@ -1497,7 +1498,7 @@ export default {
             type: "object",
             required: ["campaign_id", "leads"],
             properties: {
-              campaign_id: { type: "string" },
+              campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." },
               source: { type: "string", enum: ["manual", "apollo", "hunter", "enrichment", "mcp", "csv_upload"], description: "Default 'mcp'." },
               leads: {
                 type: "array",
@@ -1529,7 +1530,7 @@ export default {
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
-            properties: { campaign_id: { type: "string" } },
+            properties: { campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." } },
           },
         },
         {
@@ -1574,9 +1575,9 @@ export default {
             type: "object",
             required: ["campaign_id"],
             properties: {
-              campaign_id: { type: "string" },
-              lifecycle_stage: { type: "string", enum: ["imported", "enriched", "scored", "crm_ready", "crm_synced", "rejected", "bounced"] },
-              enrichment_status: { type: "string", enum: ["pending", "enriched", "failed", "skipped"] },
+              campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." },
+              lifecycle_stage: { type: "string", enum: ["imported", "enriched", "scored", "crm_ready", "crm_synced", "rejected", "bounced"], description: "Optional: filter by lifecycle stage." },
+              enrichment_status: { type: "string", enum: ["pending", "enriched", "failed", "skipped"], description: "Optional: filter by enrichment status." },
               limit: { type: "integer", description: "Default 50, max 100." },
             },
           },
@@ -1633,9 +1634,11 @@ export default {
               kind: {
                 type: "string",
                 enum: ["wizard", "working_set", "pinned_entity"],
+                description: "Which kind of state to retrieve: wizard | working_set | pinned_entity.",
               },
               key: {
                 type: "string",
+                description: "Logical identifier within the kind (same key used in setWorkingMemory).",
               },
             },
           },
@@ -1648,15 +1651,15 @@ export default {
               type: "object",
               required: ["title"],
               properties: {
-                title:  { type: "string" },
-                detail: { type: "string" },
+                title:  { type: "string", description: "Short task title." },
+                detail: { type: "string", description: "Optional longer description of the task." },
                 owner:  { type: "string", description: "Assignee (free text)" },
-                bucket: { type: "string", enum: ["now", "next", "later"] },
-                impact:               { type: "integer", minimum: 1, maximum: 10 },
-                confidence:           { type: "number",  minimum: 0, maximum: 1 },
+                bucket: { type: "string", enum: ["now", "next", "later"], description: "Time horizon: now | next | later." },
+                impact:               { type: "integer", minimum: 1, maximum: 10, description: "ICE impact, 1-10 (higher = more impact)." },
+                confidence:           { type: "number",  minimum: 0, maximum: 1, description: "ICE confidence, 0-1 (probability the impact materializes)." },
                 effort_constraint:    { type: "integer", minimum: 1, maximum: 10, description: "Effort on the bottleneck lane (see workspace label_constraint)" },
                 effort_nonconstraint: { type: "integer", minimum: 1, maximum: 10, description: "Effort on the non-bottleneck lane" },
-                related_memory_id:    { type: "string" },
+                related_memory_id:    { type: "string", description: "Optional ID of a related memory to link." },
                 steps: {
                   type: "array",
                   description: "Optional checklist of sub-steps.",
@@ -1679,10 +1682,10 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                status: { type: "string", enum: ["open", "in_progress", "done", "dropped"] },
-                bucket: { type: "string", enum: ["now", "next", "later"] },
-                owner:  { type: "string" },
-                limit:  { type: "integer" },
+                status: { type: "string", enum: ["open", "in_progress", "done", "dropped"], description: "Optional: filter by status: open | in_progress | done | dropped." },
+                bucket: { type: "string", enum: ["now", "next", "later"], description: "Optional: filter by bucket: now | next | later." },
+                owner:  { type: "string", description: "Optional: filter by assignee." },
+                limit:  { type: "integer", description: "Max results. Default: 50." },
               },
             },
           },
@@ -1693,7 +1696,7 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                limit: { type: "integer" },
+                limit: { type: "integer", description: "Max tasks to return. Default: 20." },
               },
             },
           },
@@ -1705,16 +1708,16 @@ export default {
               type: "object",
               required: ["id"],
               properties: {
-                id:     { type: "string" },
-                title:  { type: "string" },
-                status: { type: "string", enum: ["open", "in_progress", "done", "dropped"] },
-                bucket: { type: "string", enum: ["now", "next", "later"] },
-                impact:               { type: "integer", minimum: 1, maximum: 10 },
-                confidence:           { type: "number",  minimum: 0, maximum: 1 },
-                effort_constraint:    { type: "integer", minimum: 1, maximum: 10 },
-                effort_nonconstraint: { type: "integer", minimum: 1, maximum: 10 },
-                owner:  { type: "string" },
-                detail: { type: "string" },
+                id:     { type: "string", description: "ID of the task to update (from listTasks)." },
+                title:  { type: "string", description: "Optional new task title." },
+                status: { type: "string", enum: ["open", "in_progress", "done", "dropped"], description: "New status: open | in_progress | done | dropped." },
+                bucket: { type: "string", enum: ["now", "next", "later"], description: "Time horizon: now | next | later." },
+                impact:               { type: "integer", minimum: 1, maximum: 10, description: "ICE impact, 1-10 (higher = more impact)." },
+                confidence:           { type: "number",  minimum: 0, maximum: 1, description: "ICE confidence, 0-1 (probability the impact materializes)." },
+                effort_constraint:    { type: "integer", minimum: 1, maximum: 10, description: "Effort on the bottleneck lane (see workspace label_constraint)." },
+                effort_nonconstraint: { type: "integer", minimum: 1, maximum: 10, description: "Effort on the non-bottleneck lane." },
+                owner:  { type: "string", description: "Assignee (free text)." },
+                detail: { type: "string", description: "Optional longer description of the task." },
                 steps: {
                   type: "array",
                   description: "Replace the task's checklist. Omit to leave unchanged.",
@@ -1739,10 +1742,10 @@ export default {
               type: "object",
               required: ["w_constraint", "w_nonconstraint"],
               properties: {
-                w_constraint:        { type: "number", minimum: 0 },
-                w_nonconstraint:     { type: "number", minimum: 0 },
-                label_constraint:    { type: "string" },
-                label_nonconstraint: { type: "string" },
+                w_constraint:        { type: "number", minimum: 0, description: "Weight for the constraint (bottleneck) effort lane in the ICE score." },
+                w_nonconstraint:     { type: "number", minimum: 0, description: "Weight for the non-constraint effort lane in the ICE score." },
+                label_constraint:    { type: "string", description: "Optional display label for the constraint lane (e.g. 'Engineering')." },
+                label_nonconstraint: { type: "string", description: "Optional display label for the non-constraint lane (e.g. 'Design')." },
               },
             },
           },
@@ -1755,7 +1758,7 @@ export default {
               required: ["id", "step_id"],
               properties: {
                 id:      { type: "string", description: "Task UUID." },
-                step_id: { type: "string" },
+                step_id: { type: "string", description: "ID of the step to toggle (from the task's steps)." },
                 done:    { type: "boolean", description: "Omit to flip the current state." },
               },
             },
