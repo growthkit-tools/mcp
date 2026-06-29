@@ -408,14 +408,14 @@ export default {
     // Set once per request in the tools/call demo path (C3). When present, the
     // next successful (non-error) tool result gets exactly one CTA text-block.
     let pendingDemoCta = null;
-    function json(data, status = 200) {
+    function json(data, status = 200, extraHeaders = {}) {
       if (pendingDemoCta && data && data.result && Array.isArray(data.result.content) && !data.result.isError) {
         data.result.content.push({ type: "text", text: pendingDemoCta });
         pendingDemoCta = null; // append at most once
       }
       return new Response(JSON.stringify(data), {
         status,
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...CORS_HEADERS },
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...CORS_HEADERS, ...extraHeaders },
       });
     }
 
@@ -559,16 +559,29 @@ export default {
       const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
       const isInitialize = method === "initialize";
       const isInitialized = method === "initialized";
-      const requiresAuth = !isInitialize && !isInitialized;
+      // Discovery methods are public (no token) so registry/directory scanners
+      // (Smithery, Glama, mcp.so, MCP-Inspector without login) can enumerate
+      // capabilities without running the OAuth flow. Execution methods
+      // (tools/call, prompts/get, resources/read) stay gated below.
+      const PUBLIC_METHODS = new Set(["initialize", "initialized", "ping", "tools/list", "prompts/list", "resources/list"]);
+      const requiresAuth = !PUBLIC_METHODS.has(method);
+
+      // Point OAuth-capable clients at the resource metadata so they can find
+      // the auth server when they hit a gated 401.
+      const WWW_AUTH = { "WWW-Authenticate": `Bearer resource_metadata="${BASE_URL}/.well-known/oauth-protected-resource"` };
 
       if (requiresAuth && !token) {
-        return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required" } }, 401);
+        return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required" } }, 401, WWW_AUTH);
       }
 
       let userToken = null;
       let isDemo = false;
       let demoClient = "other", demoLang = "en";
-      if (requiresAuth && token) {
+      // Resolve the token whenever one is present (except on the handshake), so an
+      // authenticated discovery call (e.g. tools/list) still gets role-based
+      // filtering. A public method with a missing/invalid token falls through
+      // unauthenticated; a gated method with an invalid token is rejected.
+      if (token && !isInitialize && !isInitialized) {
         try {
           const tokenLookup = await fetch(
             `${env.SUPABASE_URL}/rest/v1/oauth_tokens?access_token=eq.${token}&select=*`,
@@ -584,8 +597,8 @@ export default {
             }
           }
         } catch (e) { console.error("Token lookup error:", e); }
-        if (!userToken) {
-          return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Invalid or expired token" } });
+        if (!userToken && requiresAuth) {
+          return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Invalid or expired token" } }, 401, WWW_AUTH);
         }
       }
 
@@ -629,6 +642,10 @@ export default {
 
       if (method === "initialized") {
         return new Response("", { status: 200, headers: CORS_HEADERS });
+      }
+
+      if (method === "ping") {
+        return json({ jsonrpc: "2.0", id, result: {} });
       }
 
       // =========================================================
@@ -1815,9 +1832,36 @@ export default {
           toggleStep:     ["admin", "team"],
         };
 
-        const filteredTools = userRole === "demo"
-          ? allTools.filter(t => DEMO_TOOLS.has(t.name))
-          : allTools.filter(t => (toolRoleMap[t.name] || []).includes(userRole));
+        // Tool annotations (MCP readOnlyHint/destructiveHint) for registry/client
+        // labeling and Claude Connectors directory submission.
+        const READ_ONLY_TOOLS = new Set([
+          "searchMemory", "listMemories", "countMemories", "getChapterOverview",
+          "listDocuments", "getDocument", "listReminders", "getHistory", "listDeleted",
+          "listTeam", "checkNotifications",
+          "crmSearchCompany", "crmGetCompany", "crmGetCompanyDeals", "crmGetCompanyContacts",
+          "crmSearchContact", "crmListCompanies", "crmListPeople", "crmGetContact",
+          "crmGetPipelines", "crmGetDeal", "crmCheckConnection",
+          "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail",
+          "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
+          "getWorkingMemory", "listTasks", "getOpenTasks",
+        ]);
+        const DESTRUCTIVE_TOOLS = new Set(["deleteMemories", "clearMemories", "deleteDocument"]);
+        const annotate = (t) => ({
+          ...t,
+          annotations: READ_ONLY_TOOLS.has(t.name)
+            ? { readOnlyHint: true }
+            : { readOnlyHint: false, destructiveHint: DESTRUCTIVE_TOOLS.has(t.name) },
+        });
+
+        // Unauthenticated discovery (no token) returns the FULL catalog so
+        // registries can show the complete capability set; execution stays gated.
+        // Authenticated calls keep the existing role-based filtering untouched.
+        const baseTools = !userToken
+          ? allTools
+          : userRole === "demo"
+            ? allTools.filter(t => DEMO_TOOLS.has(t.name))
+            : allTools.filter(t => (toolRoleMap[t.name] || []).includes(userRole));
+        const filteredTools = baseTools.map(annotate);
         return json({ jsonrpc: "2.0", id, result: { tools: filteredTools } });
       }
 
