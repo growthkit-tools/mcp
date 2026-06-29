@@ -712,7 +712,9 @@ export default {
         const promptList = Object.values(PLAYBOOK_PROMPTS)
           .filter(roleFilter[userRole])
           .map(p => ({ name: p.name, title: p.title, description: p.description, arguments: p.arguments || [] }));
-        return json({ jsonrpc: "2.0", id, result: { prompts: promptList, nextCursor: null } });
+        // Omit nextCursor entirely (not null) — MCP spec treats it as an optional
+        // string; strict parsers (Smithery) reject null. No pagination here.
+        return json({ jsonrpc: "2.0", id, result: { prompts: promptList } });
       }
 
       if (method === "prompts/get") {
@@ -2572,7 +2574,7 @@ if (name === "getChapterOverview") {
             description: "Overview of all memory chapters with content counts — shows what knowledge is stored.",
             mimeType: "text/plain",
           },
-        ], nextCursor: null } });
+        ] } });
       }
 
       if (method === "resources/read") {
