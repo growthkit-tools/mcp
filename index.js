@@ -756,6 +756,32 @@ export default {
           "Pick the most specific tags from the taxonomy. You may add 1-2 free-form tags if needed. " +
           "For batch embeds, tag each item individually.";
 
+        // Shared output schema for the ICE task tools (listTasks / getOpenTasks).
+        // Nullable columns use ["type","null"] unions; unlisted columns (steps,
+        // timestamps, etc.) pass through as permitted additional properties.
+        const TASK_ITEM_SCHEMA = {
+          type: "object",
+          properties: {
+            id:                   { type: ["string", "number"] },
+            title:                { type: "string" },
+            status:               { type: "string", description: "open | in_progress | done | dropped." },
+            bucket:               { type: ["string", "null"], description: "now | next | later." },
+            impact:               { type: ["integer", "null"] },
+            confidence:           { type: ["number", "null"] },
+            effort_constraint:    { type: ["integer", "null"] },
+            effort_nonconstraint: { type: ["integer", "null"] },
+            owner:                { type: ["string", "null"] },
+            ice_score:            { type: ["number", "null"], description: "Computed ICE score (GENERATED column)." },
+            detail:               { type: ["string", "null"] },
+          },
+          required: ["id", "title", "status"],
+        };
+        const TASK_LIST_OUTPUT_SCHEMA = {
+          type: "object",
+          properties: { tasks: { type: "array", description: "Tasks ranked by ICE (highest first).", items: TASK_ITEM_SCHEMA } },
+          required: ["tasks"],
+        };
+
         const allTools = [
           {
             name: "embedMemory",
@@ -846,12 +872,39 @@ export default {
               type: "object",
               properties: { metadata_filter: { type: "object", description: "Optional metadata filters. Use chapter to count within a specific chapter.", additionalProperties: { type: "string" } } },
             },
+            outputSchema: {
+              type: "object",
+              properties: {
+                count: { type: "integer", description: "Number of matching memories." },
+                chapter: { type: "string", description: "Chapter the count was filtered to, if any." },
+              },
+              required: ["count"],
+            },
           },
           {
             name: "getChapterOverview",
             title: "Chapter Overview",
             description: "Get memory count per chapter. Use as FIRST STEP in new conversations or reviews.",
             inputSchema: { type: "object", properties: {} },
+            outputSchema: {
+              type: "object",
+              properties: {
+                chapters: {
+                  type: "array",
+                  description: "Per-chapter memory counts (readable chapters only).",
+                  items: {
+                    type: "object",
+                    properties: {
+                      chapter: { type: "string" },
+                      count: { type: "integer" },
+                    },
+                    required: ["chapter", "count"],
+                  },
+                },
+                total: { type: "integer", description: "Total memory count across readable chapters." },
+              },
+              required: ["chapters"],
+            },
           },
           {
             name: "uploadDocument",
@@ -935,6 +988,26 @@ export default {
                 limit: { type: "integer", description: "Max results. Default: 50." },
                 task_id: { type: "string", description: "Optional: only reminders linked to this task." },
               },
+            },
+            outputSchema: {
+              type: "object",
+              properties: {
+                reminders: {
+                  type: "array",
+                  description: "Matching reminders, ordered by remind_at ascending.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: ["string", "number"] },
+                      title: { type: "string" },
+                      remind_at: { type: "string", description: "ISO 8601 timestamp." },
+                      status: { type: "string", description: "pending | sent | cancelled." },
+                    },
+                    required: ["id", "title", "remind_at", "status"],
+                  },
+                },
+              },
+              required: ["reminders"],
             },
           },
           {
@@ -1251,6 +1324,14 @@ export default {
           title: "CRM: Check Connection",
           description: "Check if CRM is connected and which provider is active.",
           inputSchema: { type: "object", properties: {} },
+          outputSchema: {
+            type: "object",
+            properties: {
+              connected: { type: "boolean", description: "Whether a CRM provider is connected." },
+              provider: { type: ["string", "null"], description: "Active CRM provider, if connected." },
+            },
+            required: ["connected"],
+          },
         },
         // === Enrichment Tools (via n8n-proxy) ===
         {
@@ -1688,6 +1769,7 @@ export default {
                 limit:  { type: "integer", description: "Max results. Default: 50." },
               },
             },
+            outputSchema: TASK_LIST_OUTPUT_SCHEMA,
           },
           {
             name: "getOpenTasks",
@@ -1699,6 +1781,7 @@ export default {
                 limit: { type: "integer", description: "Max tasks to return. Default: 20." },
               },
             },
+            outputSchema: TASK_LIST_OUTPUT_SCHEMA,
           },
           {
             name: "updateTask",
@@ -1990,10 +2073,13 @@ if (name === "getChapterOverview") {
     const { data, ok } = await callEdge(EDGE_EMBED_URL, { action: "overview", user_token: userToken });
     if (ok && data.success) {
       const readableChapters = chapterPerms[userRole].read;
-      const lines = Object.entries(data.chapters)
-        .filter(([ch]) => readableChapters.includes(ch))
-        .map(([ch, count]) => ch + ": " + count + " memories");
-      return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "\ud83d\udcda Chapter Overview\n" + "\u2500".repeat(30) + "\n" + lines.join("\n") + "\n" + "\u2500".repeat(30) + "\nTotal: " + data.total + " memories" }] } });
+      const entries = Object.entries(data.chapters).filter(([ch]) => readableChapters.includes(ch));
+      const lines = entries.map(([ch, count]) => ch + ": " + count + " memories");
+      const structuredContent = {
+        chapters: entries.map(([ch, count]) => ({ chapter: ch, count: Number(count) || 0 })),
+        total: Number(data.total) || 0,
+      };
+      return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "\ud83d\udcda Chapter Overview\n" + "\u2500".repeat(30) + "\n" + lines.join("\n") + "\n" + "\u2500".repeat(30) + "\nTotal: " + data.total + " memories" }], structuredContent } });
     }
   } catch (e) { console.error("Overview RPC failed, falling back:", e); }
 
@@ -2012,7 +2098,11 @@ if (name === "getChapterOverview") {
     total = data?.count ?? 0;
   } catch (e) { total = "error"; }
   const overview = chapters.map(ch => ch + ": " + counts[ch] + " memories").join("\n");
-  return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "\ud83d\udcda Chapter Overview\n" + "\u2500".repeat(30) + "\n" + overview + "\n" + "\u2500".repeat(30) + "\nTotal: " + total + " memories" }] } });
+  const structuredContent = {
+    chapters: chapters.map(ch => ({ chapter: ch, count: typeof counts[ch] === "number" ? counts[ch] : 0 })),
+    total: typeof total === "number" ? total : 0,
+  };
+  return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "\ud83d\udcda Chapter Overview\n" + "\u2500".repeat(30) + "\n" + overview + "\n" + "\u2500".repeat(30) + "\nTotal: " + total + " memories" }], structuredContent } });
 }
 
         // === Reminders — direct Supabase REST ===
@@ -2049,7 +2139,9 @@ if (name === "getChapterOverview") {
           if (args.task_id) query += `&task_id=eq.${args.task_id}`;
           const res = await fetch(query, { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
           const data = await res.json();
-          return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: res.ok ? JSON.stringify(data) : "Failed to list reminders" }], isError: !res.ok } });
+          const result = { content: [{ type: "text", text: res.ok ? JSON.stringify(data) : "Failed to list reminders" }], isError: !res.ok };
+          if (res.ok) result.structuredContent = { reminders: Array.isArray(data) ? data : [] };
+          return json({ jsonrpc: "2.0", id, result });
         }
         if (name === "cancelReminder") {
           const userId = await resolveUserId(userToken);
@@ -2061,6 +2153,13 @@ if (name === "getChapterOverview") {
         }
 
         // === Task Tools — direct PostgREST RPC (service_role); RPC hashes p_token ===
+        // Normalize task RPC output (array OR { tasks } OR { items }) to an array so
+        // structuredContent always matches the { tasks: [...] } output schema.
+        const asTaskArray = (d) =>
+          Array.isArray(d) ? d
+          : Array.isArray(d?.tasks) ? d.tasks
+          : Array.isArray(d?.items) ? d.items
+          : [];
         if (name === "createTask") {
           const { data, ok } = await callRpc("gk_create_task", {
             p_token: userToken,
@@ -2085,14 +2184,22 @@ if (name === "getChapterOverview") {
             p_owner: args.owner ?? null,
             p_limit: args.limit ?? 50,
           });
-          return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok } });
+          const result = { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok };
+          if (ok) result.structuredContent = { tasks: asTaskArray(data) };
+          return json({ jsonrpc: "2.0", id, result });
         }
         if (name === "getOpenTasks") {
           const { data, ok } = await callRpc("gk_get_open_tasks", {
             p_token: userToken,
             p_limit: args.limit ?? 10,
           });
-          return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok } });
+          const result = { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok };
+          if (ok) {
+            const sc = { tasks: asTaskArray(data) };
+            if (data && !Array.isArray(data) && typeof data.total_open === "number") sc.total_open = data.total_open;
+            result.structuredContent = sc;
+          }
+          return json({ jsonrpc: "2.0", id, result });
         }
         if (name === "updateTask") {
           const { data, ok } = await callRpc("gk_update_task", {
@@ -2196,7 +2303,16 @@ if (name === "getChapterOverview") {
 
           try {
             const { data, ok } = await callEdge(EDGE_PROXY_URL, crmPayload);
-            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok } });
+            const result = { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok };
+            if (ok && name === "crmCheckConnection") {
+              const base = (data && typeof data === "object" && !Array.isArray(data)) ? data : {};
+              const connected = Boolean(
+                base.connected ?? base.success ??
+                (typeof base.status === "string" && /connect|^ok$|active/i.test(base.status))
+              );
+              result.structuredContent = { ...base, connected };
+            }
+            return json({ jsonrpc: "2.0", id, result });
           } catch (e) {
             return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "CRM error: " + e.message } });
           }
@@ -2529,7 +2645,14 @@ if (name === "getChapterOverview") {
 
         try {
           const { data, ok } = await callEdge(config.url, payload);
-          return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok } });
+          const result = { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok };
+          if (ok && name === "countMemories") {
+            const sc = { count: Number(data?.count ?? 0) };
+            const ch = args.metadata_filter && args.metadata_filter.chapter;
+            if (ch) sc.chapter = ch;
+            result.structuredContent = sc;
+          }
+          return json({ jsonrpc: "2.0", id, result });
         } catch (e) {
           console.error("Edge function error:", e);
           return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Backend error: " + e.message } });
