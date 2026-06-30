@@ -1,3 +1,6 @@
+// v1.10.0 — 2026-06-30: Playbook prompt bodies moved to private Edge (n8n-embed
+//                       get_prompt) behind growth/pro plan-gate. Worker keeps only
+//                       prompt metadata for prompts/list; prompts/get fetches body.
 // v1.9.0 — 2026-06-23: Fixed reminders tools (user_token column removed → resolve to user_id
 //                       via resolve_user_token). Added task_id link on createReminder + listReminders filter.
 // v1.8.0 — 2026-04-29: Added updateCampaignLead tool (Task 8). Whitelist-based
@@ -548,7 +551,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/") {
-      return json({ name: "growthkit-mcp", version: "1.9.0", protocol: "2025-11-25", status: "running" });
+      return json({ name: "growthkit-mcp", version: "1.10.0", protocol: "2025-11-25", status: "running" });
     }
 
     if (request.method === "POST" && url.pathname === "/") {
@@ -635,7 +638,7 @@ export default {
           result: {
             protocolVersion: "2025-11-25",
             capabilities: { prompts: { listChanged: false }, resources: { listChanged: false }, tools: { listChanged: false } },
-            serverInfo: { name: "growthkit-mcp", title: "GrowthKit Memory Assistant", version: "1.9.0" },
+            serverInfo: { name: "growthkit-mcp", title: "GrowthKit Memory Assistant", version: "1.10.0" },
           },
         });
       }
@@ -652,27 +655,27 @@ export default {
       // PROMPTS — Playbook System
       // =========================================================
 
+      // Prompt-Metadaten (public-safe). Die eigentlichen Bodies liegen privat in der
+      // Edge (n8n-embed action 'get_prompt') hinter einem growth/pro-Abo-Gate und
+      // werden bei prompts/get live geladen.
       const PLAYBOOK_PROMPTS = {
         "onboarding": {
           name: "onboarding",
           title: "GrowthKit Onboarding \u2014 Set Up Your Marketing Memory",
           description: "1. Set up your marketing memory",
           arguments: [],
-          messages: [{ role: "user", content: { type: "text", text: "You are onboarding a new GrowthKit user. Your goal is to fill their marketing memory with foundational knowledge.\n\nSTEP 0 — PROGRESS CHECK:\nFirst, use getChapterOverview to see whats already stored.\nThen search the general chapter for an existing onboarding-status memory.\n- If an onboarding-status memory exists: Read it, summarize what was already completed, and CONTINUE from the first incomplete area. Do NOT repeat completed areas.\n- If no onboarding-status exists: Start fresh from Step 1.\n\nSTEP 1 — ROLE CHECK:\nAsk the user: Before we start — whats your role? Are you the founder or CEO setting the strategic direction, or are you on the marketing/sales team executing campaigns?\nWait for their answer before proceeding.\nSave the role to the general chapter using embedMemory with metadata topic=onboarding-status, source=onboarding.\n\n--- IF CEO / FOUNDER / STRATEGIC ROLE ---\n\nWork through these areas IN ORDER, one at a time:\n\n1. BUSINESS VISION (strategy chapter):\n   - What does the company do? Product/service in one sentence.\n   - What stage are you at? (Pre-revenue, seed, Series A, profitable, etc.)\n   - What are the top 3 business goals for the next 6 months?\n   - What is your core value proposition — why do customers choose you over alternatives?\n\n2. TARGET AUDIENCE (icp chapter):\n   - Who is your ideal customer? Be specific — industry, size, stage.\n   - If unsure, suggest: We can run a dedicated ICP Workshop after onboarding to define this in detail.\n   - B2B or B2C? Who makes the buying decision? Whats the typical deal size?\n\n3. BRAND POSITIONING (brand chapter):\n   - How should the brand sound? (Professional, casual, provocative, technical?)\n   - Any words/phrases to always use or avoid?\n   - What tone do you want your team to use when speaking to customers?\n\n4. COMPETITIVE LANDSCAPE (competitors chapter):\n   - Who are the top 3 competitors?\n   - Whats your key differentiator vs. each?\n   - Where are they stronger? Where are you stronger?\n\n5. SUCCESS METRICS (analytics chapter):\n   - What KPIs define success for the business? (MRR, ARR, CAC, LTV, pipeline?)\n   - What targets have you set for the next 6 months?\n   - Where does the data live? (HubSpot, GA4, Spreadsheet?)\n\n--- IF MARKETING / SALES / OPERATIONAL ROLE ---\n\nIMPORTANT: First, search the strategy, icp, and brand chapters. If the CEO has already completed onboarding, summarize whats stored: Your CEO has defined the following strategy and ICP: [summary]. Ill use this as our foundation.\n\nThen work through these areas IN ORDER, one at a time:\n\n1. YOUR RESPONSIBILITY (strategy chapter):\n   - Whats your role exactly? (Content marketing, demand gen, SDR, account executive, etc.)\n   - Which channels or campaigns do you own?\n   - What tools do you use daily? (HubSpot, LinkedIn Ads, Mailchimp, Salesforce, etc.)\n\n2. CURRENT CAMPAIGNS (campaigns chapter):\n   - What campaigns are currently running?\n   - Whats working well? Whats underperforming?\n   - Any upcoming launches or deadlines?\n\n3. METRICS YOU TRACK (analytics chapter):\n   - Which KPIs are you personally responsible for?\n   - How did last week/month look? Any notable changes?\n   - What does good look like for your metrics?\n\n4. LEARNINGS & BLOCKERS (learnings chapter):\n   - What have you learned recently that the team should know?\n   - Any recurring problems or bottlenecks?\n   - What would make your job easier?\n\n5. COMPETITIVE OBSERVATIONS (competitors chapter):\n   - Have you noticed anything from competitors recently? (New campaigns, messaging changes, pricing moves?)\n   - What do prospects say when they compare you to competitors?\n\n--- END ROLE SPLIT ---\n\nAFTER EACH AREA:\n- Save the information to the correct chapter using embedMemory.\n- Update the onboarding progress by updating the onboarding-status memory in the general chapter. Use updateMemory to replace its content with the current status, for example: Onboarding progress (CEO role): 1. Business Vision DONE — 2. Target Audience DONE — 3. Brand Positioning PENDING — 4. Competitive Landscape PENDING — 5. Success Metrics PENDING. Always include which role was selected.\n\nAFTER COMPLETING ALL AREAS:\n- Use getChapterOverview to show the user what was captured.\n- Update the onboarding-status memory to mark all areas as DONE.\n- For CEO: Suggest You could run the ICP Workshop next for deeper targeting, or upload a strategy doc for me to extract insights from.\n- For Operational: Suggest You could run the Campaign Brief or Content Brief playbook to start creating based on the strategy your CEO defined.\n\nRULES:\n- Ask ONE area at a time. Dont overwhelm with all questions at once.\n- If the user doesnt know something, skip it and note it as a knowledge gap in the onboarding-status.\n- If the user wants to stop and continue later, update the onboarding-status memory with current progress and confirm: Your progress is saved. Just start the Onboarding playbook again and Ill pick up where we left off.\n\nLANGUAGE: Always respond in the users language. Detect their language from their messages and match it consistently throughout the conversation." }}],
         },
         "icp-workshop": {
           name: "icp-workshop",
           title: "ICP Workshop \u2014 Define Your Ideal Customer",
           description: "2. Define or refine your ICP",
           arguments: [{ name: "mode", description: "Either create (start from scratch) or review (validate existing ICP). Default: auto-detect based on ICP chapter content.", required: false }],
-          messages: [{ role: "user", content: { type: "text", text: "You are running a structured ICP (Ideal Customer Profile) workshop. Follow these steps precisely:\n\nSTEP 0 \u2014 CONTEXT CHECK:\nFirst, use getChapterOverview to see the current state. Then search the icp chapter for existing profiles.\n- If ICP data exists: Summarize what we already know and ask the user if they want to REFINE the existing ICP or CREATE a new segment.\n- If ICP chapter is empty: Check strategy and analytics chapters for any clues (product info, revenue data, existing customers). Use whatever you find as starting context.\n\nSTEP 1 \u2014 COMPANY PROFILE (B2B) or DEMOGRAPHIC (B2C):\nAsk about: Industry/vertical, company size (employees + revenue range), geography, growth stage (startup/scaleup/enterprise), tech stack or infrastructure.\nFor B2C: Age range, income level, location, lifestyle, occupation.\nDo NOT accept vague answers like all SMBs or everyone. Push for specifics: Which type of SMB? SaaS with 10-50 employees? Manufacturing with 100-500?\n\nSTEP 2 \u2014 DECISION MAKER & BUYING COMMITTEE:\nAsk about: Primary decision maker (title, role, seniority), other stakeholders involved, who has budget authority, typical reporting structure.\nProbe: Who signs the contract? Who evaluates the tool? Who blocks deals?\n\nSTEP 3 \u2014 PAIN POINTS & TRIGGERS:\nAsk about: Top 3 problems your product solves for them, what triggers them to look for a solution (new funding, team growth, compliance requirement, competitive pressure), what happens if they do nothing (cost of inaction).\nPush for emotional and business impact: What keeps the decision maker up at night about this problem?\n\nSTEP 4 \u2014 BUYING BEHAVIOR:\nAsk about: How they discover solutions (Google, peer recommendations, events, analysts), typical sales cycle length, deal size range, common objections, competitive alternatives they evaluate.\n\nSTEP 5 \u2014 QUALIFICATION CRITERIA:\nBased on all answers, help define: Must-have criteria (non-negotiable), nice-to-have criteria, disqualification criteria (when to walk away).\nFrame these as a simple scoring checklist the sales team can use.\n\nSTEP 6 \u2014 SAVE TO MEMORY:\nCompile the complete ICP into a structured memory entry. Use embedMemory with chapter icp. Include a clear segment name (e.g. Series A SaaS - VP Marketing).\nIf multiple segments were discussed, create one memory per segment.\nAdd metadata: topic=icp-segment-[name], source=icp-workshop.\n\nRULES:\n- Ask ONE step at a time. Wait for the users answer before moving on.\n- After each answer, briefly summarize what you understood and confirm before proceeding.\n- If the user is unsure about something, offer 2-3 concrete examples from their industry to help them decide.\n- At the end, offer to create a reminder for ICP review in 90 days.\n\nLANGUAGE: Always respond in the user's language." }}],
         },
         "competitor-analysis": {
           name: "competitor-analysis",
           title: "Competitor Analysis \u2014 Research & Profile a Competitor",
           description: "3. Analyze a competitor",
           arguments: [{ name: "competitor_name", description: "Name of the competitor to analyze.", required: false }],
-          messages: [{ role: "user", content: { type: "text", text: "You are conducting a competitor analysis. Follow this process:\n\nSTEP 0 \u2014 CHECK EXISTING KNOWLEDGE:\nSearch the competitors chapter for any existing data on this competitor.\nAlso search icp and strategy for context on our own positioning.\nIf data exists, present it: Heres what we already know about [competitor]. Want me to update this or start fresh?\n\nSTEP 1 \u2014 COMPANY OVERVIEW:\nAsk about or research: Company size, funding, target market, pricing model, key customers.\n\nSTEP 2 \u2014 PRODUCT COMPARISON:\nAsk: What features or capabilities do they have that we dont? And vice versa?\nCreate a simple strengths/weaknesses comparison.\n\nSTEP 3 \u2014 POSITIONING & MESSAGING:\nAsk: How do they position themselves? Whats their main value proposition?\nCompare with our brand messaging from the brand chapter.\n\nSTEP 4 \u2014 GO-TO-MARKET:\nAsk: What channels do they use? Any notable campaigns, content strategies, or partnerships?\n\nSTEP 5 \u2014 THREAT ASSESSMENT:\nBased on all data, summarize:\n- Threat level (low/medium/high) and why\n- Where theyre stronger than us\n- Where were stronger\n- Recommended counter-strategies\n\nSTEP 6 \u2014 SAVE:\nSave the complete analysis to the competitors chapter.\nUse metadata: topic=competitor-[name], source=competitor-analysis.\nOffer to set a reminder to review this competitor profile in 90 days.\n\nLANGUAGE: Always respond in the user's language." }}],
         },
         "campaign-brief": {
           name: "campaign-brief",
@@ -682,7 +685,6 @@ export default {
             { name: "campaign_type", description: "Type of campaign: paid-ads, content, email, event, launch, social, or other.", required: false },
             { name: "goal", description: "Primary campaign goal: awareness, leads, pipeline, activation, retention.", required: false },
           ],
-          messages: [{ role: "user", content: { type: "text", text: "You are creating a data-driven campaign brief. Before asking the user anything, gather context from memory:\n\nSTEP 0 \u2014 MEMORY RESEARCH (do this silently):\nSearch these chapters and note what you find:\n- icp: Who are we targeting? Segments, pain points, triggers.\n- brand: What tone and messaging guidelines exist?\n- strategy: What are the current goals and positioning?\n- learnings: What worked/didnt work in past campaigns?\n- analytics: What are current performance benchmarks?\n- competitors: What are competitors doing that we should differentiate from?\n\nSTEP 1 \u2014 BRIEF THE USER ON CONTEXT:\nPresent a short summary: Based on your memory, heres what I know: [ICP summary], [brand voice], [current goals], [past learnings]. Is this still accurate?\n\nSTEP 2 \u2014 FILL THE GAPS:\nAsk only whats missing or needs confirmation:\n- Campaign type and channel (if not provided via arguments)\n- Specific goal and target metric\n- Budget range\n- Timeline / launch date\n- Any specific constraints or requirements\n\nSTEP 3 \u2014 GENERATE THE BRIEF:\nCreate a structured campaign brief with:\n- Objective (SMART goal)\n- Target audience (from ICP data)\n- Key message and angle (aligned with brand voice)\n- Channel strategy\n- Content/creative requirements\n- Budget allocation suggestion\n- Success metrics and measurement plan\n- Timeline with milestones\n- Risks and mitigations (informed by past learnings)\n\nSTEP 4 \u2014 SAVE & SCHEDULE:\n- Save the brief to the campaigns chapter with metadata topic and source.\n- Offer to create reminders for key milestones.\n\nLANGUAGE: Always respond in the user's language." }}],
         },
         "content-brief": {
           name: "content-brief",
@@ -692,14 +694,12 @@ export default {
             { name: "content_type", description: "Type: blog-post, whitepaper, case-study, linkedin-post, newsletter, landing-page.", required: false },
             { name: "topic", description: "Topic or theme for the content.", required: false },
           ],
-          messages: [{ role: "user", content: { type: "text", text: "You are creating a content brief. Start by gathering context from memory:\n\nSTEP 0 \u2014 MEMORY RESEARCH (do this before asking questions):\n- Search icp for target audience pain points and language.\n- Search brand for voice and messaging guidelines.\n- Search competitors for topics competitors cover (to differentiate).\n- Search learnings for past content performance insights.\n\nSTEP 1 \u2014 TOPIC & ANGLE:\nIf no topic was provided, suggest 3-5 topic ideas based on ICP pain points and competitive gaps.\nFor each suggestion, explain WHY it matters to the target audience.\nLet the user pick or refine.\n\nSTEP 2 \u2014 BRIEF GENERATION:\nCreate a brief with:\n- Working title (+ 2 alternatives)\n- Target audience segment (from ICP)\n- Key message / thesis\n- Outline with 4-6 sections\n- SEO keywords to target (if applicable)\n- Tone and style notes (from brand chapter)\n- CTA (what should the reader do next?)\n- Competitive angle (how this differs from what competitors say)\n- Target word count and format\n\nSTEP 3 \u2014 SAVE:\nSave the brief to the campaigns chapter with metadata topic and source=content-brief.\nOffer to create a reminder for the content deadline.\n\nLANGUAGE: Always respond in the user's language." }}],
         },
         "weekly-review": {
           name: "weekly-review",
           title: "Weekly Review \u2014 Marketing Performance Check",
           description: "6. Weekly performance check-in",
           arguments: [],
-          messages: [{ role: "user", content: { type: "text", text: "You are conducting a weekly marketing review. Follow this structure:\n\nSTEP 1 \u2014 CHAPTER HEALTH CHECK:\nUse getChapterOverview. For each chapter:\n- Flag chapters with 0 memories as knowledge gaps.\n- Note chapters that havent been updated recently.\n- Present a quick health score.\n\nSTEP 2 \u2014 STRATEGY ALIGNMENT:\nSearch the strategy chapter for current goals and OKRs.\nSearch the campaigns chapter for active campaigns.\nAsk: Are your current campaigns still aligned with these goals?\n\nSTEP 3 \u2014 PERFORMANCE CHECK:\nSearch the analytics chapter for recent KPIs.\nAsk: How did this weeks numbers look? Any metrics that moved significantly?\nIf the user shares new data, save it to the analytics chapter.\n\nSTEP 4 \u2014 LEARNINGS CAPTURE:\nAsk: What worked well this week? What didnt? Any surprises?\nSave insights to the learnings chapter.\n\nSTEP 5 \u2014 COMPETITIVE INTEL:\nAsk: Anything new from competitors?\nSave updates to the competitors chapter.\n\nSTEP 6 \u2014 ACTION ITEMS:\nSuggest 3-5 priorities for next week.\nOffer to create reminders for each action item.\n\nLANGUAGE: Always respond in the user's language." }}],
         },
       };
 
@@ -709,8 +709,9 @@ export default {
           team: (p) => ["onboarding", "campaign-brief", "content-brief", "weekly-review"].includes(p.name),
           view: () => false,
         };
+        const filterFn = roleFilter[userRole] || (() => false); // demo/unbekannt → keine Prompts
         const promptList = Object.values(PLAYBOOK_PROMPTS)
-          .filter(roleFilter[userRole])
+          .filter(filterFn)
           .map(p => ({ name: p.name, title: p.title, description: p.description, arguments: p.arguments || [] }));
         // Omit nextCursor entirely (not null) — MCP spec treats it as an optional
         // string; strict parsers (Smithery) reject null. No pagination here.
@@ -718,22 +719,50 @@ export default {
       }
 
       if (method === "prompts/get") {
+        // Defense-in-Depth: Demo sieht keine Prompts (prompts/list ist für Demo
+        // ohnehin leer, aber ein direkter get soll auch nichts liefern).
+        if (isDemo) {
+          return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Prompts are not available in the GrowthKit demo." } });
+        }
+
         const promptName = params.name;
         const prompt = PLAYBOOK_PROMPTS[promptName];
         if (!prompt) {
           return json({ jsonrpc: "2.0", id, error: { code: -32602, message: "Unknown prompt: " + promptName + ". Available: " + Object.keys(PLAYBOOK_PROMPTS).join(", ") } });
         }
-        let messages = JSON.parse(JSON.stringify(prompt.messages));
+
+        // Body privat aus der Edge holen (Abo-Gate dort: growth/pro bekommen die
+        // Methodik, free einen Upgrade-Hinweis als Body — beides kommt als String).
+        let bodyText;
+        try {
+          const { data, ok } = await callEdge(EDGE_EMBED_URL, {
+            action: "get_prompt",
+            user_token: userToken,
+            prompt_name: promptName,
+          });
+          if (!ok || !data || typeof data.body !== "string") {
+            return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Failed to load prompt body" } });
+          }
+          bodyText = data.body;
+        } catch (e) {
+          return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Prompt fetch error: " + e.message } });
+        }
+
+        // Platzhalter-Ersetzung bleibt im Worker (z. B. {{mode}}, {{competitor_name}}).
         if (params.arguments) {
-          for (const msg of messages) {
-            if (msg.content && typeof msg.content === "object" && msg.content.text) {
-              for (const [key, value] of Object.entries(params.arguments)) {
-                msg.content.text = msg.content.text.replace(new RegExp("\\{\\{" + key + "\\}\\}", "g"), value);
-              }
-            }
+          for (const [key, value] of Object.entries(params.arguments)) {
+            bodyText = bodyText.replace(new RegExp("\\{\\{" + key + "\\}\\}", "g"), value);
           }
         }
-        return json({ jsonrpc: "2.0", id, result: { title: prompt.title, description: prompt.description, messages } });
+
+        return json({
+          jsonrpc: "2.0", id,
+          result: {
+            title: prompt.title,
+            description: prompt.description,
+            messages: [{ role: "user", content: { type: "text", text: bodyText } }],
+          },
+        });
       }
 
       // -------------------------------------------------------
