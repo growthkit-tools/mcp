@@ -1,7 +1,6 @@
 # GrowthKit Revenue Intelligence — MCP Server
 
 [![smithery badge](https://smithery.ai/badge/growthkit/revenue-intelligence)](https://smithery.ai/server/growthkit/revenue-intelligence)
-[![Glama score](https://glama.ai/mcp/connectors/tools.growthkit/revenue-intelligence/badges/score.svg)](https://glama.ai/mcp/connectors/tools.growthkit/revenue-intelligence)
 
 > Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.
 
