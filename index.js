@@ -2887,12 +2887,13 @@ if (name === "getChapterOverview") {
       if (isDemo) {
         effectiveUserToken = env.DEMO_USER_TOKEN;
         if (!effectiveUserToken) return new Response("<html><body><p>Demo is temporarily unavailable.</p></body></html>", { status: 503, headers: { "Content-Type": "text/html" } });
-      } else {
+        } else {
         if (!user_token || !user_token.startsWith("gk_")) {
           const retryUrl = new URL(BASE_URL + "/authorize");
           for (const [k, v] of Object.entries(body)) { if (k !== "user_token") retryUrl.searchParams.set(k, v); }
           return new Response(`<html><body><p>Invalid token. <a href="${retryUrl}">Try again</a>.</p></body></html>`, { status: 400, headers: { "Content-Type": "text/html" } });
         }
+        effectiveUserToken = user_token;
         try {
           const validationResponse = await fetch(EDGE_EMBED_URL, {
             method: "POST",
