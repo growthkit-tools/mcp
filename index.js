@@ -515,6 +515,25 @@ export default {
       return new Response(FAVICON_SVG, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
     }
 
+    // Glama Connector-Ownership-Verify. Statische, öffentliche Datei — kein Secret.
+    // Glama crawlt /.well-known/glama.json und matcht die maintainer-Email gegen
+    // die E-Mail des Glama-Accounts.
+    if (request.method === "GET" && url.pathname === "/.well-known/glama.json") {
+      return new Response(
+        JSON.stringify({
+          "$schema": "https://glama.ai/mcp/schemas/connector.json",
+          maintainers: [{ email: "team@growthkit.tools" }],
+        }),
+        {
+          headers: {
+            "content-type": "application/json",
+            "cache-control": "public, max-age=3600",
+            ...CORS_HEADERS,
+          },
+        }
+      );
+    }
+
     async function sha256Hex(input) {
       const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
       return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
