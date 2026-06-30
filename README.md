@@ -1,10 +1,7 @@
 # GrowthKit Revenue Intelligence — MCP Server
 
 [![smithery badge](https://smithery.ai/badge/growthkit/revenue-intelligence)](https://smithery.ai/server/growthkit/revenue-intelligence)
-<!-- GLAMA BADGE — nach dem ersten Glama-Crawl ersetzen. Den fertigen Badge-Markdown
-     findest du auf deiner Glama-Server-Seite unter "Overview"/"Badge". Beispielform:
-     [![Glama](https://glama.ai/mcp/servers/<DEIN-SLUG>/badge)](https://glama.ai/mcp/servers/<DEIN-SLUG>)
-     Bis dahin auskommentiert lassen, damit kein toter Link im README steht. -->
+[![Glama score](https://glama.ai/mcp/servers/tools.growthkit/revenue-intelligence/badges/score.svg)](https://glama.ai/mcp/servers/tools.growthkit/revenue-intelligence)
 
 > Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.
 
@@ -76,17 +73,17 @@ read/write permissions, plus a read-only `demo` surface. Plan-gated features
 ## Architecture
 
 ```
-MCP client ──▶ Cloudflare Worker (this repo) ──▶ Supabase Edge Functions ──▶ Postgres
-                     │                                  (EU / Frankfurt)
+MCP client ──▶ MCP protocol layer (this repo) ──▶ GrowthKit backend
+                     │
                      └─ OAuth 2.0 (PKCE), role/plan gating, demo surface
 ```
 
-This repository contains the **Cloudflare Worker** that speaks the MCP protocol,
+This repository contains the **MCP protocol layer**: it speaks the MCP protocol,
 handles the OAuth flow, enforces role- and plan-based access control, and routes
-tool calls to the GrowthKit backend. The backend itself (scoring logic, database,
-automation) is not part of this repository.
+tool calls to the GrowthKit backend. The backend itself — scoring logic, data
+store and automation — is not part of this repository.
 
-EU-hosted (Supabase, Frankfurt). GDPR-aligned.
+EU-hosted, GDPR-aligned.
 
 ---
 
@@ -95,7 +92,9 @@ EU-hosted (Supabase, Frankfurt). GDPR-aligned.
 - Website: https://growthkit.tools
 - MCP overview: https://growthkit.tools/en/mcp
 - Pricing: https://growthkit.tools/en/pricing
+- GTM Advisory: https://growthkit.consulting
 - Smithery: https://smithery.ai/server/growthkit/revenue-intelligence
+- Glama: https://glama.ai/mcp/connectors/tools.growthkit/revenue-intelligence
 
 ---
 
