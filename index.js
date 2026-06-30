@@ -19,15 +19,6 @@
 //                       2026-05-21 for any direct callers.
 // v1.4.0 — 2026-04-24: Added email_compose tool (draft + send via provider-agnostic dispatch).
 
-// service_role → sb_secret_ Migration: Key nur auf apikey, kein Bearer (sonst PostgREST "Invalid JWT").
-// Legacy-JWT (eyJ…) behält Bearer, damit der Übergang ohne gesetztes Secret nicht bricht.
-function sbHeaders(env, extra = {}) {
-  const key = env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
-  return key.startsWith("eyJ")
-    ? { apikey: key, Authorization: `Bearer ${key}`, ...extra }   // Legacy-JWT: apikey + Bearer
-    : { apikey: key, ...extra };                                  // sb_secret_: NUR apikey
-}
-
 // ── MCP-Client-Erkennung aus redirect_uri ──────────────────────────────
 // Nur der Client ist aus dem OAuth-Request ableitbar (nicht das Directory).
 // Substring-Match auf der ganzen URI, robust auch für custom schemes (cursor://, claude://).
@@ -449,7 +440,11 @@ export default {
     async function callRpc(fn, body) {
       const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
         method: "POST",
-        headers: sbHeaders(env, { "Content-Type": "application/json" }),
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(body),
       });
       let data;
@@ -526,7 +521,12 @@ export default {
         const ip_hash = await sha256Hex(ip + (env.PIXEL_SALT || ""));
         await fetch(`${env.SUPABASE_URL}/rest/v1/gmail_opens`, {
           method: "POST",
-          headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
+          headers: {
+            "Content-Type": "application/json",
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+            Prefer: "return=minimal",
+          },
           body: JSON.stringify({ tracking_id, ip_hash, user_agent }),
         }).catch(() => {});
       })());
@@ -585,7 +585,7 @@ export default {
         try {
           const tokenLookup = await fetch(
             `${env.SUPABASE_URL}/rest/v1/oauth_tokens?access_token=eq.${token}&select=*`,
-            { headers: sbHeaders(env) }
+            { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } }
           );
           if (tokenLookup.ok) {
             const tokenRows = await tokenLookup.json();
@@ -2124,7 +2124,7 @@ if (name === "getChapterOverview") {
             metadata: args.metadata || {},
             task_id: args.task_id ?? null,
           };
-          const res = await fetch(`${env.SUPABASE_URL}/rest/v1/reminders`, { method: "POST", headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=representation" }), body: JSON.stringify(reminder) });
+          const res = await fetch(`${env.SUPABASE_URL}/rest/v1/reminders`, { method: "POST", headers: { "Content-Type": "application/json", apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, Prefer: "return=representation" }, body: JSON.stringify(reminder) });
           const data = await res.json();
           return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: res.ok ? `Reminder created: "${args.title}" for ${args.remind_at}${args.task_id ? ` (task ${args.task_id})` : ""} (ID: ${data[0]?.id})` : `Failed: ${JSON.stringify(data)}` }], isError: !res.ok } });
         }
@@ -2137,7 +2137,7 @@ if (name === "getChapterOverview") {
           let query = `${env.SUPABASE_URL}/rest/v1/reminders?user_id=eq.${userId}&order=remind_at.asc&limit=${args.limit || 20}`;
           if (status !== "all") query += `&status=eq.${status}`;
           if (args.task_id) query += `&task_id=eq.${args.task_id}`;
-          const res = await fetch(query, { headers: sbHeaders(env) });
+          const res = await fetch(query, { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } });
           const data = await res.json();
           const result = { content: [{ type: "text", text: res.ok ? JSON.stringify(data) : "Failed to list reminders" }], isError: !res.ok };
           if (res.ok) result.structuredContent = { reminders: Array.isArray(data) ? data : [] };
@@ -2148,7 +2148,7 @@ if (name === "getChapterOverview") {
           if (!userId) {
             return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Failed: could not resolve user for token." }], isError: true } });
           }
-          const res = await fetch(`${env.SUPABASE_URL}/rest/v1/reminders?id=eq.${args.reminder_id}&user_id=eq.${userId}`, { method: "PATCH", headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }), body: JSON.stringify({ status: "cancelled" }) });
+          const res = await fetch(`${env.SUPABASE_URL}/rest/v1/reminders?id=eq.${args.reminder_id}&user_id=eq.${userId}`, { method: "PATCH", headers: { "Content-Type": "application/json", apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, Prefer: "return=minimal" }, body: JSON.stringify({ status: "cancelled" }) });
           return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: res.ok ? `Reminder ${args.reminder_id} cancelled.` : "Failed to cancel." }], isError: !res.ok } });
         }
 
@@ -2846,7 +2846,7 @@ if (name === "getChapterOverview") {
       };
       const insertResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_clients`, {
         method: "POST",
-        headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
+        headers: { "Content-Type": "application/json", apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, Prefer: "return=minimal" },
         body: JSON.stringify(clientData),
       });
       if (!insertResponse.ok) { return json({ error: "server_error" }, 500); }
@@ -2920,7 +2920,7 @@ if (name === "getChapterOverview") {
       const code = crypto.randomUUID();
       await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes`, {
         method: "POST",
-        headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
+        headers: { "Content-Type": "application/json", apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, Prefer: "return=minimal" },
         body: JSON.stringify({ code, client_id, redirect_uri, scope: isDemo ? "mcp:read" : (scope || "mcp:read mcp:write"), code_challenge: code_challenge || null, code_challenge_method: code_challenge_method || null, user_token: effectiveUserToken, expires_at: Date.now() + 10 * 60 * 1000, is_demo: isDemo, mcp_client: postClient, lang: postLang }),
       });
 
@@ -2959,7 +2959,7 @@ if (name === "getChapterOverview") {
         if (!code || !client_id) return json({ error: "invalid_request" }, 400);
 
         const codeResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes?code=eq.${code}`, {
-          headers: sbHeaders(env),
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
         });
         if (!codeResponse.ok) return json({ error: "server_error" }, 500);
         const rows = await codeResponse.json();
@@ -2978,7 +2978,7 @@ if (name === "getChapterOverview") {
         }
 
         await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes?code=eq.${code}`, {
-          method: "DELETE", headers: sbHeaders(env),
+          method: "DELETE", headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
         });
 
         const access_token = crypto.randomUUID();
@@ -2987,7 +2987,7 @@ if (name === "getChapterOverview") {
 
         await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_tokens`, {
           method: "POST",
-          headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
+          headers: { "Content-Type": "application/json", apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, Prefer: "return=minimal" },
           body: JSON.stringify({ access_token, refresh_token, client_id, scope: tokenScope, user_token: stored.user_token, expires_at: Date.now() + 3600 * 1000, refresh_expires_at: Date.now() + 14 * 24 * 3600 * 1000, is_demo: stored.is_demo === true, mcp_client: stored.mcp_client || null, lang: stored.lang || null }),
         });
 
@@ -2999,7 +2999,7 @@ if (name === "getChapterOverview") {
         if (!refresh_token) return json({ error: "invalid_request" }, 400);
 
         const tokenResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_tokens?refresh_token=eq.${refresh_token}`, {
-          headers: sbHeaders(env),
+          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
         });
         if (!tokenResponse.ok) return json({ error: "server_error" }, 500);
         const tokenRows = await tokenResponse.json();
@@ -3010,7 +3010,7 @@ if (name === "getChapterOverview") {
         const new_access_token = crypto.randomUUID();
         await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_tokens?refresh_token=eq.${refresh_token}`, {
           method: "PATCH",
-          headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
+          headers: { "Content-Type": "application/json", apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, Prefer: "return=minimal" },
           body: JSON.stringify({ access_token: new_access_token, expires_at: Date.now() + 3600 * 1000 }),
         });
 
