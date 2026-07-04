@@ -423,21 +423,29 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     --vc-item-details: rgba(255, 255, 255, 0.5);
     --vc-ok: #BFFF00;
     --vc-err: #FF6B6B;
+    /* Typography is coupled to the host font. applyHostStyles() mirrors the host's
+       styles.variables (incl. --font-sans, the ONLY sans family key per SEP-1865) onto
+       :root at runtime, so this resolves to Claude's own UI font in Web AND Desktop.
+       Before the handshake / if the host sends no --font-sans, it falls back to a
+       deliberate sans-only chain — NEVER a serif. Montserrat/Inter are intentionally
+       gone (unavailable in the iframe; their absence let a serif default slip in). */
+    --gk-font: var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 8px;
     background: var(--bg-base);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: var(--gk-font);
     font-size: 14px; -webkit-font-smoothing: antialiased;
   }
   .vc-card {
     background: var(--vc-bg); border: 1px solid var(--vc-border);
     border-radius: 12px; overflow: hidden;
-    font-family: 'Inter', -apple-system, sans-serif;
+    font-family: var(--gk-font);
   }
   .vc-card-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 0; }
-  .vc-card-title { font-family: 'Montserrat', 'Inter', sans-serif; font-weight: 700; font-size: 14px; color: var(--vc-title); }
+  /* Same font-family as the body (host font); only heavier/left as-is via weight+size. */
+  .vc-card-title { font-family: var(--gk-font); font-weight: 700; font-size: 14px; color: var(--vc-title); }
   .vc-card-badge { font-size: 11px; color: var(--vc-badge); font-weight: 500; }
   .vc-card-body { padding: 12px 16px 16px; }
   .vc-lead-list { display: flex; flex-direction: column; gap: 8px; }
@@ -454,7 +462,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   .vc-lead-status.ok { color: var(--vc-ok); }
   .vc-lead-status.err { color: var(--vc-err); }
   .vc-action {
-    font-family: 'Inter', -apple-system, sans-serif; font-size: 12px; font-weight: 600;
+    font-family: var(--gk-font); font-size: 12px; font-weight: 600;
     color: var(--gk-accent); background: var(--gk-accent-dim); border: 1px solid var(--vc-border);
     border-radius: 8px; padding: 7px 12px; cursor: pointer;
     transition: background 0.15s, border-color 0.15s, color 0.15s;
@@ -534,6 +542,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     // Only AFTER this notification does the host deliver tool-input / tool-result and
     // start honoring size-changed.
     sendNotification("ui/notifications/initialized", {});
+    applyHostStyles(hostContext);   // couple typography to the host font
     applyHostContext(hostContext);
     reportSize();
     if (bufferedResult) { applyToolResult(bufferedResult); } // apply anything seen early
@@ -568,7 +577,11 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
         toolInput = (d.params && d.params.arguments) || null;
         break;
       case "ui/notifications/host-context-changed":
-        hostContext = (d.params && d.params.hostContext) || hostContext;
+        // params is a PARTIAL McpUiHostContext (only the changed fields; e.g. { theme }
+        // on a theme toggle). Merge shallowly, then re-apply font + sizing.
+        var patch = (d.params && d.params.hostContext) ? d.params.hostContext : d.params;
+        hostContext = Object.assign({}, hostContext || {}, patch || {});
+        applyHostStyles(hostContext);
         applyHostContext(hostContext);
         reportSize();
         break;
@@ -580,6 +593,34 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     // leads live in structuredContent.
     var leads = params && params.structuredContent && params.structuredContent.leads;
     render(Array.isArray(leads) ? leads : []);
+  }
+
+  // Couple typography to the host (mirrors the ext-apps applyHostStyleVariables +
+  // applyHostFonts). Two channels live in hostContext.styles:
+  //  • variables — CSS custom properties (incl. --font-sans / --font-mono, the only
+  //    family keys per SEP-1865). Mirrored onto :root so the card's --gk-font
+  //    (= var(--font-sans, <sans fallback>)) inherits Claude's UI font. Never a serif.
+  //  • css.fonts — raw @font-face / @import rules that actually LOAD a self-hosted host
+  //    font (e.g. "Anthropic Sans"); injected as a <style> so the family resolves.
+  function applyHostStyles(ctx) {
+    try {
+      var styles = ctx && ctx.styles;
+      if (!styles) return;
+      var vars = styles.variables;
+      if (vars) {
+        for (var k in vars) {
+          if (Object.prototype.hasOwnProperty.call(vars, k) && vars[k] != null) {
+            try { document.documentElement.style.setProperty(k, String(vars[k])); } catch (e) {}
+          }
+        }
+      }
+      if (styles.css && styles.css.fonts) {
+        var id = "__mcp-host-fonts";
+        var el = document.getElementById(id);
+        if (!el) { el = document.createElement("style"); el.id = id; (document.head || document.documentElement).appendChild(el); }
+        el.textContent = String(styles.css.fonts);
+      }
+    } catch (e) {}
   }
 
   // Size behavior from hostContext.containerDimensions (per spec):
