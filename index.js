@@ -476,6 +476,50 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   /* Guarantee a non-zero height so the host never collapses the mounted iframe to 0
      while the data handshake is still in flight. */
   #root { min-height: 44px; }
+  /* ── Post-call panel (Block 2b): morphs the clicked lead row after place_call.
+     Reuses the same brand tokens + host typography as the rest of the card. ── */
+  .vc-lead-row { flex-wrap: wrap; }   /* lets the full-width panel wrap under info+btn */
+  [hidden] { display: none !important; }
+  .vc-postcall {
+    flex-basis: 100%; margin-top: 10px; padding-top: 10px;
+    border-top: 1px solid var(--vc-item-border);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .vc-note {
+    width: 100%; box-sizing: border-box; min-height: 52px; resize: vertical;
+    background: var(--vc-item-bg); border: 1px solid var(--vc-item-border); border-radius: 8px;
+    color: var(--vc-item-title); font-family: var(--gk-font); font-size: 12.5px;
+    padding: 8px 10px; outline: none;
+  }
+  .vc-note:focus { border-color: var(--gk-accent); }
+  .vc-note::placeholder { color: var(--vc-item-details); }
+  .vc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .vc-chip {
+    font-family: var(--gk-font); font-size: 11.5px; font-weight: 600;
+    color: var(--vc-item-details); background: var(--vc-item-bg);
+    border: 1px solid var(--vc-item-border); border-radius: 999px;
+    padding: 5px 10px; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .vc-chip:hover:not(.sel) { color: var(--vc-item-title); }
+  .vc-chip.sel { color: var(--bg-base); background: var(--gk-accent); border-color: var(--gk-accent); }
+  .vc-callback { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--vc-item-details); }
+  .vc-cb-date {
+    background: var(--vc-item-bg); border: 1px solid var(--vc-item-border); border-radius: 8px;
+    color: var(--vc-item-title); font-family: var(--gk-font); font-size: 12px;
+    padding: 5px 8px; outline: none; color-scheme: dark;
+  }
+  .vc-cb-date:focus { border-color: var(--gk-accent); }
+  .vc-postcall-actions { display: flex; align-items: center; gap: 10px; }
+  .vc-save {
+    font-family: var(--gk-font); font-size: 12px; font-weight: 600;
+    color: var(--bg-base); background: var(--gk-accent); border: 1px solid var(--gk-accent);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; transition: opacity 0.15s;
+  }
+  .vc-save:disabled { opacity: 0.45; cursor: default; }
+  .vc-save-status { font-size: 11.5px; }
+  .vc-save-status.ok { color: var(--vc-ok); }
+  .vc-save-status.err { color: var(--vc-err); }
 </style>
 </head>
 <body>
@@ -665,10 +709,11 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     call_initiation_failed: "Anruf konnte nicht gestartet werden."
   };
 
-  function interpret(res) {
-    var sc = (res && res.structuredContent) || res || {};
-    // content[].text may carry the JSON when structuredContent is absent
-    if ((sc.ok === undefined) && res && Array.isArray(res.content)) {
+  // Pull the structuredContent out of a tools/call result — falling back to a JSON
+  // payload carried in content[].text when structuredContent is absent.
+  function readSc(res) {
+    var sc = (res && res.structuredContent) || null;
+    if (!sc && res && Array.isArray(res.content)) {
       for (var i = 0; i < res.content.length; i++) {
         var c = res.content[i];
         if (c && c.type === "text" && typeof c.text === "string") {
@@ -676,6 +721,11 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
         }
       }
     }
+    return sc || {};
+  }
+
+  function interpret(res) {
+    var sc = readSc(res);
     if (sc.ok === true || sc.call_log_id) return { ok: true, call_log_id: sc.call_log_id };
     return { ok: false, error: sc.error || "call_failed" };
   }
@@ -702,7 +752,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     return parts.join(" \\u00b7 ");
   }
 
-  function onCall(btn, lead, statusEl) {
+  function onCall(btn, lead, statusEl, row) {
     if (!CAN_CALL) return; // hard client guard; server also rejects view/demo
     btn.disabled = true;
     btn.className = "vc-action vc-action-loading";
@@ -717,6 +767,8 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
         statusEl.className = "vc-lead-status ok";
         statusEl.textContent = "\\u2713 Dein Telefon klingelt gleich \\u2013 dann verbinden wir den Lead.";
         btn.textContent = "\\u2713 Anruf gestartet";
+        // place_call returned a call_log_id → morph the row into the post-call panel.
+        if (r.call_log_id) showPostCallPanel(row, lead, r.call_log_id);
       } else {
         statusEl.className = "vc-lead-status err";
         statusEl.textContent = ERR_MSG[r.error] || ("Fehler: " + r.error);
@@ -730,6 +782,144 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
       btn.disabled = false;
       btn.textContent = label;
     });
+  }
+
+  // ── Post-call panel (Block 2b) ──────────────────────────────────────────────
+  // After place_call resolves with a call_log_id, morph the clicked lead row into a
+  // transient panel: note textarea + 6 single-select disposition chips + (callback-
+  // only) date + Save. Save → app-private save_call_outcome tool. This is transient
+  // iframe DOM state — it is NOT re-derived from the next tool-result.
+  var DISPOSITIONS = [
+    ["interested",   "Interessiert"],
+    ["no_need",      "Kein Bedarf"],
+    ["callback",     "R\\u00fcckruf"],
+    ["voicemail",    "Mailbox"],
+    ["wrong_number", "Falsche Nr."],
+    ["dnc",          "Nicht kontaktieren"]
+  ];
+  var ERR_MSG_SAVE = {
+    read_only_role: "Speichern ist f\\u00fcr deine Rolle nicht verf\\u00fcgbar.",
+    invalid_input: "Ung\\u00fcltige Eingabe.",
+    call_log_not_found: "Call nicht gefunden."
+  };
+  function dispLabel(v) {
+    for (var i = 0; i < DISPOSITIONS.length; i++) { if (DISPOSITIONS[i][0] === v) return DISPOSITIONS[i][1]; }
+    return v;
+  }
+
+  function showPostCallPanel(row, lead, callLogId) {
+    if (!row || row.querySelector(".vc-postcall")) return; // guard: build once
+
+    var panel = document.createElement("div");
+    panel.className = "vc-postcall";
+
+    var note = document.createElement("textarea");
+    note.className = "vc-note";
+    note.setAttribute("placeholder", "Notiz zum Call\\u2026");
+    note.setAttribute("rows", "2");
+
+    var chips = document.createElement("div");
+    chips.className = "vc-chips";
+    var selected = null;
+
+    var callbackWrap = document.createElement("div");
+    callbackWrap.className = "vc-callback";
+    callbackWrap.hidden = true;
+    var cbLabel = document.createElement("span");
+    cbLabel.textContent = "R\\u00fcckruf am\\u2026";
+    var cbDate = document.createElement("input");
+    cbDate.type = "date";
+    cbDate.className = "vc-cb-date";
+    try { cbDate.min = new Date().toISOString().slice(0, 10); } catch (e) {}
+    callbackWrap.appendChild(cbLabel);
+    callbackWrap.appendChild(cbDate);
+
+    var actions = document.createElement("div");
+    actions.className = "vc-postcall-actions";
+    var save = document.createElement("button");
+    save.type = "button";
+    save.className = "vc-save";
+    save.textContent = "Speichern";
+    save.disabled = true;
+    var saveStatus = document.createElement("span");
+    saveStatus.className = "vc-save-status";
+    actions.appendChild(save);
+    actions.appendChild(saveStatus);
+
+    function refreshSave() {
+      // Enabled as soon as a disposition OR a note is present.
+      save.disabled = !(selected || note.value.trim().length > 0);
+    }
+
+    DISPOSITIONS.forEach(function (d) {
+      var chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "vc-chip";
+      chip.setAttribute("data-disp", d[0]);
+      chip.textContent = d[1];
+      chip.addEventListener("click", function () {
+        if (selected === d[0]) {
+          selected = null;
+          chip.classList.remove("sel");
+        } else {
+          selected = d[0];
+          var all = chips.querySelectorAll(".vc-chip");
+          for (var i = 0; i < all.length; i++) all[i].classList.remove("sel");
+          chip.classList.add("sel");
+        }
+        callbackWrap.hidden = selected !== "callback";
+        refreshSave();
+        reportSize();
+      });
+      chips.appendChild(chip);
+    });
+
+    note.addEventListener("input", refreshSave);
+
+    save.addEventListener("click", function () {
+      var disposition = selected || null;
+      var notes = note.value.trim();
+      var callArgs = { call_log_id: callLogId };
+      if (disposition) callArgs.disposition = disposition;
+      if (notes) callArgs.notes = notes;
+      if (disposition === "callback" && cbDate.value) {
+        var remindAt = cbDate.value;
+        try { var dd = new Date(cbDate.value + "T09:00:00"); if (!isNaN(dd.getTime())) remindAt = dd.toISOString(); } catch (e) {}
+        callArgs.next_action = { remind_at: remindAt, title: "R\\u00fcckruf: " + (lead.company_name || lead.contact_name || "Lead") };
+      }
+      save.disabled = true;
+      save.textContent = "speichert\\u2026";
+      saveStatus.className = "vc-save-status";
+      saveStatus.textContent = "";
+      sendRequest("tools/call", { name: "save_call_outcome", arguments: callArgs }).then(function (res) {
+        var sc = readSc(res);
+        if (sc.ok === true) {
+          // Collapse the panel; badge the row (like the extension).
+          var st = row.querySelector(".vc-lead-status");
+          if (st) { st.className = "vc-lead-status ok"; st.textContent = disposition ? ("\\u2713 " + dispLabel(disposition)) : "\\u2713 Gespeichert"; }
+          if (panel.parentNode) panel.parentNode.removeChild(panel);
+          reportSize();
+        } else {
+          saveStatus.className = "vc-save-status err";
+          saveStatus.textContent = ERR_MSG_SAVE[sc.error] || ("Fehler: " + (sc.error || "unbekannt"));
+          save.disabled = false;
+          save.textContent = "Speichern";
+        }
+      }).catch(function () {
+        saveStatus.className = "vc-save-status err";
+        saveStatus.textContent = "Speichern fehlgeschlagen. Bitte erneut versuchen.";
+        save.disabled = false;
+        save.textContent = "Speichern";
+      });
+    });
+
+    panel.appendChild(note);
+    panel.appendChild(chips);
+    panel.appendChild(callbackWrap);
+    panel.appendChild(actions);
+    row.appendChild(panel);
+    try { note.focus(); } catch (e) {}
+    reportSize();
   }
 
   function render(leads) {
@@ -770,7 +960,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
       btn.textContent = "\\u260e Anrufen";
       if (!CAN_CALL) { btn.disabled = true; btn.title = "Nur mit Anruf-Berechtigung"; }
       var statusEl = info.querySelector(".vc-lead-status");
-      btn.addEventListener("click", function () { onCall(btn, l, statusEl); });
+      btn.addEventListener("click", function () { onCall(btn, l, statusEl, row); });
       row.appendChild(info);
       row.appendChild(btn);
       list.appendChild(row);
@@ -2147,6 +2337,33 @@ export default {
           },
         },
         {
+          // APP-PRIVATE (MCP-Apps SEP-1865), same visibility pattern as place_call —
+          // hidden from the model, invoked only by the lead-call-card iframe's post-call
+          // panel. Saves the disposition / note / next-action for a completed call.
+          name: "save_call_outcome",
+          title: "Save Call Outcome (app-private)",
+          description: "APP-PRIVATE: saves the post-call disposition / note / next action for one call. Not model-callable (hidden via _meta.ui.visibility:[\"app\"]). Invoked only by the lead-call-card iframe after a call. The gk_ session token is taken server-side; the app passes call_log_id (from place_call) plus optional disposition / notes / next_action.",
+          _meta: { ui: { visibility: ["app"] } },
+          inputSchema: {
+            type: "object",
+            required: ["call_log_id"],
+            properties: {
+              call_log_id: { type: "string", description: "call_log_id returned by place_call in its structuredContent." },
+              disposition: { type: "string", enum: ["interested", "no_need", "callback", "voicemail", "wrong_number", "dnc"], description: "Optional call disposition." },
+              notes: { type: "string", description: "Optional free-text note about the call." },
+              next_action: {
+                type: "object",
+                description: "Optional follow-up reminder (typically for a callback disposition).",
+                required: ["remind_at"],
+                properties: {
+                  remind_at: { type: "string", description: "ISO timestamp for the reminder." },
+                  title: { type: "string", description: "Optional reminder title." },
+                },
+              },
+            },
+          },
+        },
+        {
           name: "setWorkingMemory",
           title: "Working Memory: Set",
           description: "Store structured state for the current chat session. Use this to persist data that must survive history compression — wizard fields, suggestion lists, active entities. Three kinds: 'wizard' (multi-turn field collection), 'working_set' (ephemeral suggestion lists with TTL), 'pinned_entity' (durable context). Call this AFTER the user confirms a value, BEFORE moving to the next step. The state object replaces (not merges) — fetch first if you need to merge.",
@@ -2397,6 +2614,7 @@ export default {
           // listed for view/demo — the card's ☎ button is disabled for them and the
           // place_call handler hard-rejects those roles anyway.
           place_call:            ["admin", "team"],
+          save_call_outcome:     ["admin", "team"],  // app-private post-call panel
           // Working Memory Tools — session-local, all roles read+write
           setWorkingMemory:      ["admin", "team", "view"],
           getWorkingMemory:      ["admin", "team", "view"],
@@ -2506,6 +2724,9 @@ export default {
           // only — the place_call handler hard-rejects view/demo as a second gate, and
           // callout-call itself gates each call by the rep's verified caller ID.
           place_call:            ["admin", "team"],
+          // save_call_outcome — app-private post-call panel; admin/team only. The
+          // handler hard-rejects view/demo, mirroring place_call.
+          save_call_outcome:     ["admin", "team"],
           // Working Memory Tools — session-local, all roles read+write
           setWorkingMemory:      ["admin", "team", "view"],
           getWorkingMemory:      ["admin", "team", "view"],
@@ -3032,6 +3253,46 @@ if (name === "getChapterOverview") {
           } catch (e) {
             console.error("place_call error:", e);
             return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call error: " + e.message }], structuredContent: { ok: false, error: "network_error" }, isError: true } });
+          }
+        }
+
+        // === save_call_outcome — APP-PRIVATE (Post-Call, Block 2b) ===
+        // Same app-private pattern as place_call: in tools/list with visibility:["app"],
+        // invoked only by the lead-call-card iframe's post-call panel. Pulls the gk_
+        // session token server-side (NEVER from the iframe) and forwards to the unchanged
+        // save-call-outcome edge function. view/demo hard-rejected (second gate).
+        if (name === "save_call_outcome") {
+          if (userRole === "view" || userRole === "demo") {
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Saving call outcomes is not available for your role." }], structuredContent: { ok: false, error: "read_only_role" }, isError: true } });
+          }
+          const callLogId = args.call_log_id;
+          if (typeof callLogId !== "string" || !callLogId) {
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "call_log_id is required" }], structuredContent: { ok: false, error: "invalid_input" }, isError: true } });
+          }
+          // Whitelist the forwarded fields; the gk_ token comes from the session only.
+          const payload = { user_token: userToken, call_log_id: callLogId };
+          if (typeof args.disposition === "string" && args.disposition) payload.disposition = args.disposition;
+          if (typeof args.notes === "string" && args.notes) payload.notes = args.notes;
+          if (args.next_action && typeof args.next_action === "object" && args.next_action.remind_at) {
+            payload.next_action = { remind_at: args.next_action.remind_at };
+            if (typeof args.next_action.title === "string" && args.next_action.title) payload.next_action.title = args.next_action.title;
+          }
+          try {
+            const res = await fetch(`${env.SUPABASE_URL}/functions/v1/save-call-outcome`, {
+              method: "POST",
+              headers: sbHeaders(env, { "Content-Type": "application/json" }),
+              body: JSON.stringify(payload),
+            });
+            let data = {};
+            try { data = await res.json(); } catch (e) { data = {}; }
+            if (res.ok && data && data.ok) {
+              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call outcome saved." }], structuredContent: { ok: true, campaign_lead_id: data.campaign_lead_id, reminder_created: data.reminder_created === true } } });
+            }
+            const errCode = (data && data.error) || ("http_" + res.status);
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Save failed: " + errCode }], structuredContent: { ok: false, error: errCode, status: res.status }, isError: true } });
+          } catch (e) {
+            console.error("save_call_outcome error:", e);
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Save error: " + e.message }], structuredContent: { ok: false, error: "network_error" }, isError: true } });
           }
         }
 
