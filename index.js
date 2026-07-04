@@ -500,61 +500,105 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   var nextId = 1;
   var pending = {};
   var initialized = false;
-  var bufferedResult = null; // last tool-result seen before init resolved (race guard)
+  var bufferedResult = null; // tool-result seen before init resolved (race guard)
+  var hostContext = null;    // McpUiInitializeResult.hostContext (theme/styles/dims)
+  var toolInput = null;      // ui/notifications/tool-input arguments (e.g. campaign_id)
 
   // 1) Register the host→iframe message listener FIRST, before anything else.
   window.addEventListener("message", onHostMessage);
 
   // 2) The static skeleton (header + "Lade Leads…") is already in the DOM. Report its
-  //    height immediately so the host sizes the mounted iframe even before any data
-  //    arrives, and keep reporting on every subsequent layout change.
+  //    height immediately (host may ignore it until we send the initialized
+  //    notification, but it is harmless), and keep reporting on every layout change.
   reportSize();
   if (window.ResizeObserver) {
     try { new ResizeObserver(function () { reportSize(); }).observe(document.body); } catch (e) {}
   }
 
   // 3) Fire the MCP-Apps handshake immediately (synchronously, no DOMContentLoaded).
+  //    IMPORTANT: this is the APP handshake (ui/initialize) — its params are
+  //    { appInfo, appCapabilities }. NOT the Core-MCP initialize shape
+  //    ({ capabilities, clientInfo, protocolVersion }); sending that makes the host
+  //    reject the handshake → no tool-result and a 0px iframe.
+  logToHost("ui-init sent");
   sendRequest("ui/initialize", {
-    capabilities: {},
-    clientInfo: { name: "growthkit-lead-call-card", version: "1.0.0" },
-    protocolVersion: "2025-06-18",
-    appCapabilities: { tools: { listChanged: true }, availableDisplayModes: ["inline"] }
-  }).then(function () {
+    appInfo: { name: "growthkit-lead-call", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline"] }
+  }).then(function (result) {
     initialized = true;
+    hostContext = (result && result.hostContext) || null;
+    logToHost("init result received");
+    // Only AFTER this notification does the host deliver tool-input / tool-result and
+    // start honoring size-changed.
     sendNotification("ui/notifications/initialized", {});
-    if (bufferedResult) { applyToolResult(bufferedResult); } // re-apply anything seen early
+    markReady();
+    applyHostContext(hostContext);
     reportSize();
+    if (bufferedResult) { applyToolResult(bufferedResult); } // apply anything seen early
   }).catch(function () {
     // Even if the host never answers ui/initialize, still surface any buffered data.
     initialized = true;
     if (bufferedResult) { applyToolResult(bufferedResult); }
+    reportSize();
   });
 
   function onHostMessage(ev) {
+    // Do NOT hard-filter event.origin: host messages may arrive via a sandbox proxy
+    // with a different origin. Validate by JSON-RPC shape instead.
     var d = (ev && ev.data) || {};
     if (!d || d.jsonrpc !== "2.0") return;
-    // Response to one of our requests (ui/initialize, tools/call).
+    // Response to one of our requests (ui/initialize, tools/call): has id, no method.
     if (d.id != null && pending[d.id]) {
       var p = pending[d.id]; delete pending[d.id];
       if (d.error) { p.reject(new Error((d.error && d.error.message) || "rpc_error")); }
       else { p.resolve(d.result); }
       return;
     }
-    // Host → iframe notifications. Apply tool-result on arrival (DOM is ready) and
-    // buffer it so a result that lands before ui/initialize resolves still sticks.
-    if (d.method === "ui/notifications/tool-result") {
-      bufferedResult = d.params;
-      applyToolResult(d.params);
-      return;
+    // Notifications: have method, no matching id. Dispatch by method.
+    switch (d.method) {
+      case "ui/notifications/tool-result":
+        // params is a CallToolResult; the leads live in structuredContent. Buffer it
+        // so a result that lands before ui/initialize resolves still sticks.
+        bufferedResult = d.params;
+        applyToolResult(d.params);
+        break;
+      case "ui/notifications/tool-input":
+        toolInput = (d.params && d.params.arguments) || null;
+        break;
+      case "ui/notifications/host-context-changed":
+        hostContext = (d.params && d.params.hostContext) || hostContext;
+        applyHostContext(hostContext);
+        reportSize();
+        break;
     }
-    // ui/notifications/tool-input carries the tool arguments (e.g. campaign_id); the
-    // card renders purely from tool-result, so it needs no handling here.
   }
 
   function applyToolResult(params) {
     // params is a CallToolResult; the leads live in structuredContent.
+    logToHost("tool-result received");
     var leads = params && params.structuredContent && params.structuredContent.leads;
     render(Array.isArray(leads) ? leads : []);
+  }
+
+  // Size behavior from hostContext.containerDimensions (per spec):
+  //  • fixed height     → fill the container (100vh);
+  //  • flexible maxHeight (or absent) → content-driven height, reported via size-changed.
+  function applyHostContext(ctx) {
+    try {
+      var dims = ctx && ctx.containerDimensions;
+      var fill = dims && typeof dims.height === "number";
+      document.documentElement.style.height = fill ? "100vh" : "auto";
+      document.body.style.height = fill ? "100vh" : "auto";
+    } catch (e) {}
+  }
+
+  // Diagnostic: mark the skeleton "bereit" once the handshake reaches the initialized
+  // step, so a blank card vs. a stalled-handshake card is distinguishable on screen.
+  function markReady() {
+    var root = document.getElementById("root");
+    if (root && !root.querySelector(".vc-lead-list")) {
+      root.innerHTML = '<div class="vc-loading">Bereit \\u2013 warte auf Leads\\u2026</div>';
+    }
   }
 
   function sendRequest(method, params) {
@@ -569,6 +613,12 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
 
   function sendNotification(method, params) {
     try { window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params || {} }, "*"); } catch (e) {}
+  }
+
+  // Best-effort structured log to the host (spec: notifications/message). No-op if the
+  // host ignores it; invaluable for seeing how far the handshake got.
+  function logToHost(msg) {
+    sendNotification("notifications/message", { level: "info", data: msg });
   }
 
   function reportSize() {
