@@ -465,6 +465,9 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   .vc-action-loading { animation: vc-action-pulse 1s ease-in-out infinite; }
   @keyframes vc-action-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.85; } }
   .vc-empty, .vc-loading { color: var(--vc-badge); padding: 14px 4px; text-align: center; font-size: 12.5px; }
+  /* Guarantee a non-zero height so the host never collapses the mounted iframe to 0
+     while the data handshake is still in flight. */
+  #root { min-height: 44px; }
 </style>
 </head>
 <body>
@@ -489,8 +492,70 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   // ── MCP-Apps host bridge (SEP-1865): JSON-RPC 2.0 over postMessage, no SDK ──
   // The iframe is an MCP client talking to the host via window.parent.postMessage.
   // Requests carry an id (we await a matching response); notifications omit it.
+  // CRITICAL ordering: we register the 'message' listener and fire ui/initialize
+  // SYNCHRONOUSLY here — before any async gap — so a very early host notification is
+  // never dropped. tool-result is applied on arrival AND buffered, so it sticks
+  // whether it lands before or after the ui/initialize response. The function
+  // declarations further down are hoisted, so this kickoff can reference them.
   var nextId = 1;
   var pending = {};
+  var initialized = false;
+  var bufferedResult = null; // last tool-result seen before init resolved (race guard)
+
+  // 1) Register the host→iframe message listener FIRST, before anything else.
+  window.addEventListener("message", onHostMessage);
+
+  // 2) The static skeleton (header + "Lade Leads…") is already in the DOM. Report its
+  //    height immediately so the host sizes the mounted iframe even before any data
+  //    arrives, and keep reporting on every subsequent layout change.
+  reportSize();
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(function () { reportSize(); }).observe(document.body); } catch (e) {}
+  }
+
+  // 3) Fire the MCP-Apps handshake immediately (synchronously, no DOMContentLoaded).
+  sendRequest("ui/initialize", {
+    capabilities: {},
+    clientInfo: { name: "growthkit-lead-call-card", version: "1.0.0" },
+    protocolVersion: "2025-06-18",
+    appCapabilities: { tools: { listChanged: true }, availableDisplayModes: ["inline"] }
+  }).then(function () {
+    initialized = true;
+    sendNotification("ui/notifications/initialized", {});
+    if (bufferedResult) { applyToolResult(bufferedResult); } // re-apply anything seen early
+    reportSize();
+  }).catch(function () {
+    // Even if the host never answers ui/initialize, still surface any buffered data.
+    initialized = true;
+    if (bufferedResult) { applyToolResult(bufferedResult); }
+  });
+
+  function onHostMessage(ev) {
+    var d = (ev && ev.data) || {};
+    if (!d || d.jsonrpc !== "2.0") return;
+    // Response to one of our requests (ui/initialize, tools/call).
+    if (d.id != null && pending[d.id]) {
+      var p = pending[d.id]; delete pending[d.id];
+      if (d.error) { p.reject(new Error((d.error && d.error.message) || "rpc_error")); }
+      else { p.resolve(d.result); }
+      return;
+    }
+    // Host → iframe notifications. Apply tool-result on arrival (DOM is ready) and
+    // buffer it so a result that lands before ui/initialize resolves still sticks.
+    if (d.method === "ui/notifications/tool-result") {
+      bufferedResult = d.params;
+      applyToolResult(d.params);
+      return;
+    }
+    // ui/notifications/tool-input carries the tool arguments (e.g. campaign_id); the
+    // card renders purely from tool-result, so it needs no handling here.
+  }
+
+  function applyToolResult(params) {
+    // params is a CallToolResult; the leads live in structuredContent.
+    var leads = params && params.structuredContent && params.structuredContent.leads;
+    render(Array.isArray(leads) ? leads : []);
+  }
 
   function sendRequest(method, params) {
     var id = nextId++;
@@ -513,26 +578,6 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
       sendNotification("ui/notifications/size-changed", { width: Math.ceil(r.width), height: Math.ceil(r.height) });
     } catch (e) {}
   }
-
-  window.addEventListener("message", function (ev) {
-    var d = (ev && ev.data) || {};
-    if (!d || d.jsonrpc !== "2.0") return;
-    // Response to one of our requests (ui/initialize, tools/call).
-    if (d.id != null && pending[d.id]) {
-      var p = pending[d.id]; delete pending[d.id];
-      if (d.error) { p.reject(new Error((d.error && d.error.message) || "rpc_error")); }
-      else { p.resolve(d.result); }
-      return;
-    }
-    // Host → iframe notifications.
-    if (d.method === "ui/notifications/tool-result") {
-      // params is a CallToolResult; the leads live in structuredContent.
-      var leads = d.params && d.params.structuredContent && d.params.structuredContent.leads;
-      render(Array.isArray(leads) ? leads : []);
-    }
-    // ui/notifications/tool-input carries the tool arguments (e.g. campaign_id); the
-    // card renders purely from tool-result, so it needs no handling here.
-  });
 
   var ERR_MSG = {
     caller_id_not_verified: "Bitte zuerst Nummer verifizieren (Extension \\u203a Anrufe).",
@@ -619,6 +664,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
       e.className = "vc-empty";
       e.textContent = "Keine anrufbaren Leads (Leads brauchen eine Telefonnummer).";
       root.appendChild(e);
+      reportSize();
       return;
     }
     count.textContent = leads.length === 1 ? "1 Lead" : leads.length + " Leads";
@@ -654,22 +700,6 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     root.appendChild(list);
     reportSize();
   }
-
-  // Report height on any content resize so the host can size the iframe.
-  if (window.ResizeObserver) {
-    try { new ResizeObserver(function () { reportSize(); }).observe(document.body); } catch (e) {}
-  }
-
-  // Kick off the MCP-Apps handshake; the host pushes tool-result after initialized.
-  sendRequest("ui/initialize", {
-    capabilities: {},
-    clientInfo: { name: "growthkit-lead-call-card", version: "1.0.0" },
-    protocolVersion: "2025-06-18",
-    appCapabilities: { tools: { listChanged: true }, availableDisplayModes: ["inline"] }
-  }).then(function () {
-    sendNotification("ui/notifications/initialized", {});
-    reportSize();
-  }).catch(function () {});
 })();
 </script>
 </body>
