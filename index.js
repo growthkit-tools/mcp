@@ -465,9 +465,15 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   .vc-action-loading { animation: vc-action-pulse 1s ease-in-out infinite; }
   @keyframes vc-action-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.85; } }
   .vc-empty, .vc-loading { color: var(--vc-badge); padding: 14px 4px; text-align: center; font-size: 12.5px; }
-  /* Guarantee a non-zero height so the host never collapses the mounted iframe to 0
-     while the data handshake is still in flight. */
-  #root { min-height: 44px; }
+  /* ── Diagnostic hard-overrides (temporary): force a filled, high-contrast surface
+     so a rendering iframe is impossible to miss (no white-on-white, no collapsed box).
+     Remove the lime #root border once the card is confirmed visible. ───────────── */
+  html, body { height: 100%; margin: 0; padding: 0; }
+  body { background: #1A0F2E; color: #FFFFFF;
+         font-family: 'Inter', -apple-system, system-ui, sans-serif; }
+  #root { min-height: 200px; box-sizing: border-box;
+          border: 2px solid #BFFF00;   /* temporary: makes the iframe bounds visible */
+          padding: 12px; background: #1A0F2E; }
 </style>
 </head>
 <body>
@@ -477,6 +483,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
       <span class="vc-card-badge" id="count"></span>
     </div>
     <div class="vc-card-body">
+      <div id="status" style="color:#BFFF00;font-size:14px;font-weight:700;margin-bottom:8px">&#9312; init gesendet&hellip;</div>
       <div id="root"><div class="vc-loading">Lade Leads&hellip;</div></div>
     </div>
   </div>
@@ -521,6 +528,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   //    ({ capabilities, clientInfo, protocolVersion }); sending that makes the host
   //    reject the handshake → no tool-result and a 0px iframe.
   logToHost("ui-init sent");
+  setStatus("\\u2460 init gesendet\\u2026");
   sendRequest("ui/initialize", {
     appInfo: { name: "growthkit-lead-call", version: "1.0.0" },
     appCapabilities: { availableDisplayModes: ["inline"] }
@@ -528,11 +536,14 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     initialized = true;
     hostContext = (result && result.hostContext) || null;
     logToHost("init result received");
+    setStatus("\\u2461 init-result \\u2713 \\u2014 warte auf Leads\\u2026");
     // Only AFTER this notification does the host deliver tool-input / tool-result and
     // start honoring size-changed.
     sendNotification("ui/notifications/initialized", {});
-    markReady();
     applyHostContext(hostContext);
+    // Send one FIXED-height size-changed so the status line is guaranteed visible,
+    // independent of content measurement; the ResizeObserver refines it afterwards.
+    sendNotification("ui/notifications/size-changed", { width: Math.ceil(document.documentElement.clientWidth) || 600, height: 240 });
     reportSize();
     if (bufferedResult) { applyToolResult(bufferedResult); } // apply anything seen early
   }).catch(function () {
@@ -577,7 +588,9 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     // params is a CallToolResult; the leads live in structuredContent.
     logToHost("tool-result received");
     var leads = params && params.structuredContent && params.structuredContent.leads;
-    render(Array.isArray(leads) ? leads : []);
+    var arr = Array.isArray(leads) ? leads : [];
+    setStatus("\\u2462 tool-result \\u2713 \\u2014 " + arr.length + (arr.length === 1 ? " Lead" : " Leads"));
+    render(arr);
   }
 
   // Size behavior from hostContext.containerDimensions (per spec):
@@ -592,13 +605,12 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     } catch (e) {}
   }
 
-  // Diagnostic: mark the skeleton "bereit" once the handshake reaches the initialized
-  // step, so a blank card vs. a stalled-handshake card is distinguishable on screen.
-  function markReady() {
-    var root = document.getElementById("root");
-    if (root && !root.querySelector(".vc-lead-list")) {
-      root.innerHTML = '<div class="vc-loading">Bereit \\u2013 warte auf Leads\\u2026</div>';
-    }
+  // Diagnostic status line. It lives ABOVE #root (in .vc-card-body) so render()'s
+  // innerHTML reset can't wipe it. Updated at each handshake milestone so a screenshot
+  // shows exactly how far the card got: ① init sent → ② init-result → ③ tool-result.
+  function setStatus(text) {
+    var el = document.getElementById("status");
+    if (el) el.textContent = text;
   }
 
   function sendRequest(method, params) {
