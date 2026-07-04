@@ -49,5 +49,10 @@ secrets, and being public is fine (a good engineering signal).
 
 Signed HMAC nonce, embedded into the `resources/read` card HTML and verified
 server-side — makes a forged direct `place_call` impossible. Deliberately deferred;
-build only on a concrete compliance / trust-center need. Catalog-hiding (keeping
-`place_call` out of `tools/list`) already satisfies UWG § 7 (human-initiated calls).
+build only on a concrete compliance / trust-center need. `place_call` is app-private
+via `_meta.ui.visibility: ["app"]` (MCP-Apps / SEP-1865): it is listed in `tools/list`
+but the host hides it from the model and only proxies the lead-call-card iframe's
+`tools/call`, so the model can never see or invoke it — human-initiated only, which
+already satisfies UWG § 7. (This replaced the earlier catalog-hiding approach of
+omitting `place_call` from `tools/list`; an omitted tool can be rejected by the host
+as "unknown" when the iframe calls it.)

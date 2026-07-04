@@ -382,21 +382,21 @@ async function maybeDemoCta(env, accessToken, toolName, client, lang) {
   return `\n\n— ${msg}`;
 }
 
-// ── MCP-Apps UI resource: interactive lead call card ──────────────────────
-// Served (text/html) from resources/read at ui://growthkit/lead-call-card and
-// referenced by the show_callable_leads tool via _meta.ui.resourceUri. The host
-// renders this in a sandboxed iframe and pushes the tool's structuredContent
-// (the { leads: [...] } array) into it. The ☎ button calls the app-private
-// place_call tool through the host bridge — the ONLY way a call is ever placed
-// (UWG §7: human-initiated only). The bridge passes campaign_lead_id only; the
-// gk_ session token is pulled server-side, never from the iframe (sandbox).
-//
-// NOTE (CC → Chris): the MCP-Apps host↔iframe bridge is not settled across
-// clients. This card is defensive — it accepts lead data from the OpenAI Apps
-// global (window.openai.toolOutput), a __MCP_TOOL_OUTPUT__ global, and several
-// postMessage shapes; and it places calls via window.openai.callTool OR a
-// postMessage { type:'tool', payload:{ toolName, params } } round-trip. Confirm
-// the exact shape against Claude's live MCP-Apps host and prune the rest.
+// ── MCP-Apps UI resource: interactive lead call card (SEP-1865) ───────────
+// Served (mimeType text/html;profile=mcp-app) from resources/read at
+// ui://growthkit/lead-call-card and referenced by the show_callable_leads tool via
+// _meta.ui.resourceUri. The host renders this in a sandboxed iframe. The iframe is an
+// MCP client speaking the MCP-Apps postMessage dialect (JSON-RPC 2.0 over
+// window.parent.postMessage, no SDK):
+//   • handshake — iframe sends ui/initialize request, then the
+//     ui/notifications/initialized notification once the host replies;
+//   • data in  — the host pushes ui/notifications/tool-result; the leads live in
+//     params.structuredContent (the { leads: [...] } from show_callable_leads);
+//   • action   — the ☎ button issues a tools/call request for the app-private
+//     place_call tool, which the host proxies to the server (UWG §7: human-initiated
+//     only). The bridge passes campaign_lead_id only; the gk_ session token is pulled
+//     server-side, never from the iframe (sandbox);
+//   • sizing   — the iframe emits ui/notifications/size-changed on content resize.
 const LEAD_CALL_CARD_HTML = `<!doctype html>
 <html lang="de">
 <head>
@@ -480,53 +480,58 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
 <script>
 (function () {
   "use strict";
-  var pending = {}, seq = 0, rendered = false;
   // Session role injected server-side at resources/read (admin | team | view | demo).
-  // view is system-wide read-only → the ☎ button is disabled client-side (cosmetic);
-  // place_call also hard-rejects view server-side.
+  // view / demo are read-only → the ☎ button is disabled client-side (cosmetic);
+  // place_call also hard-rejects view/demo server-side.
   var GK_ROLE = "__GK_ROLE__";
   var CAN_CALL = GK_ROLE !== "view" && GK_ROLE !== "demo";
 
-  function post(msg) { try { (window.parent || window).postMessage(msg, "*"); } catch (e) {} }
+  // ── MCP-Apps host bridge (SEP-1865): JSON-RPC 2.0 over postMessage, no SDK ──
+  // The iframe is an MCP client talking to the host via window.parent.postMessage.
+  // Requests carry an id (we await a matching response); notifications omit it.
+  var nextId = 1;
+  var pending = {};
 
-  function extractLeads(o) {
-    if (!o || typeof o !== "object") return null;
-    if (Array.isArray(o.leads)) return o.leads;
-    if (o.structuredContent) { var a = extractLeads(o.structuredContent); if (a) return a; }
-    if (o.toolOutput) { var b = extractLeads(o.toolOutput); if (b) return b; }
-    if (o.result) { var c = extractLeads(o.result); if (c) return c; }
-    return null;
-  }
-
-  function readInitialData() {
-    try { if (window.openai && window.openai.toolOutput) { var a = extractLeads(window.openai.toolOutput); if (a) return a; } } catch (e) {}
-    try { if (window.__MCP_TOOL_OUTPUT__) { var b = extractLeads(window.__MCP_TOOL_OUTPUT__); if (b) return b; } } catch (e) {}
-    return null;
-  }
-
-  // Call an MCP tool through whatever host bridge is present.
-  function callTool(name, args) {
-    try { if (window.openai && typeof window.openai.callTool === "function") { return Promise.resolve(window.openai.callTool(name, args)); } } catch (e) {}
+  function sendRequest(method, params) {
+    var id = nextId++;
     return new Promise(function (resolve, reject) {
-      var messageId = "call_" + (++seq) + "_" + Date.now();
-      pending[messageId] = { resolve: resolve, reject: reject };
-      post({ type: "tool", messageId: messageId, payload: { toolName: name, params: args } });
-      setTimeout(function () { if (pending[messageId]) { delete pending[messageId]; reject(new Error("timeout")); } }, 30000);
+      pending[id] = { resolve: resolve, reject: reject };
+      try { window.parent.postMessage({ jsonrpc: "2.0", id: id, method: method, params: params || {} }, "*"); }
+      catch (e) { delete pending[id]; reject(e); return; }
+      setTimeout(function () { if (pending[id]) { delete pending[id]; reject(new Error("timeout")); } }, 30000);
     });
+  }
+
+  function sendNotification(method, params) {
+    try { window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params || {} }, "*"); } catch (e) {}
+  }
+
+  function reportSize() {
+    try {
+      var el = document.querySelector(".vc-card") || document.body;
+      var r = el.getBoundingClientRect();
+      sendNotification("ui/notifications/size-changed", { width: Math.ceil(r.width), height: Math.ceil(r.height) });
+    } catch (e) {}
   }
 
   window.addEventListener("message", function (ev) {
     var d = (ev && ev.data) || {};
-    var mid = d.messageId || (d.payload && d.payload.messageId);
-    if (mid && pending[mid]) {
-      var p = pending[mid]; delete pending[mid];
-      var errObj = d.error || (d.payload && d.payload.error);
-      if (errObj) { p.reject(new Error("bridge_error")); }
-      else { p.resolve((d.payload && (d.payload.response || d.payload.result || d.payload.toolResult)) || d.result || d.payload || d); }
+    if (!d || d.jsonrpc !== "2.0") return;
+    // Response to one of our requests (ui/initialize, tools/call).
+    if (d.id != null && pending[d.id]) {
+      var p = pending[d.id]; delete pending[d.id];
+      if (d.error) { p.reject(new Error((d.error && d.error.message) || "rpc_error")); }
+      else { p.resolve(d.result); }
       return;
     }
-    var leads = extractLeads(d) || extractLeads(d.payload) || extractLeads(d.toolOutput);
-    if (leads) render(leads);
+    // Host → iframe notifications.
+    if (d.method === "ui/notifications/tool-result") {
+      // params is a CallToolResult; the leads live in structuredContent.
+      var leads = d.params && d.params.structuredContent && d.params.structuredContent.leads;
+      render(Array.isArray(leads) ? leads : []);
+    }
+    // ui/notifications/tool-input carries the tool arguments (e.g. campaign_id); the
+    // card renders purely from tool-result, so it needs no handling here.
   });
 
   var ERR_MSG = {
@@ -582,7 +587,7 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
     btn.textContent = "ruft an\\u2026";
     statusEl.className = "vc-lead-status";
     statusEl.textContent = "";
-    callTool("place_call", { campaign_lead_id: lead.campaign_lead_id }).then(function (res) {
+    sendRequest("tools/call", { name: "place_call", arguments: { campaign_lead_id: lead.campaign_lead_id } }).then(function (res) {
       var r = interpret(res);
       btn.className = "vc-action";
       if (r.ok) {
@@ -605,7 +610,6 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
   }
 
   function render(leads) {
-    rendered = true;
     var root = document.getElementById("root");
     var count = document.getElementById("count");
     root.innerHTML = "";
@@ -648,21 +652,24 @@ const LEAD_CALL_CARD_HTML = `<!doctype html>
       list.appendChild(row);
     });
     root.appendChild(list);
+    reportSize();
   }
 
-  // Kick off: try synchronous globals, then signal readiness for a data push.
-  var initial = readInitialData();
-  if (initial) { render(initial); }
-  post({ type: "ui-lifecycle", payload: { status: "ready" } });
-  post({ type: "ready" });
-  // Re-poll globals briefly in case the host injects them just after load.
-  var tries = 0;
-  var iv = setInterval(function () {
-    if (rendered) { clearInterval(iv); return; }
-    var l = readInitialData();
-    if (l) { render(l); clearInterval(iv); return; }
-    if (++tries > 20) { clearInterval(iv); }
-  }, 150);
+  // Report height on any content resize so the host can size the iframe.
+  if (window.ResizeObserver) {
+    try { new ResizeObserver(function () { reportSize(); }).observe(document.body); } catch (e) {}
+  }
+
+  // Kick off the MCP-Apps handshake; the host pushes tool-result after initialized.
+  sendRequest("ui/initialize", {
+    capabilities: {},
+    clientInfo: { name: "growthkit-lead-call-card", version: "1.0.0" },
+    protocolVersion: "2025-06-18",
+    appCapabilities: { tools: { listChanged: true }, availableDisplayModes: ["inline"] }
+  }).then(function () {
+    sendNotification("ui/notifications/initialized", {});
+    reportSize();
+  }).catch(function () {});
 })();
 </script>
 </body>
@@ -2001,12 +2008,33 @@ export default {
           name: "show_callable_leads",
           title: "☎ Show Callable Leads",
           description: "Render an interactive call card of leads that have a phone number, each with a ☎ Anrufen button. The HUMAN user clicks a button to place a click-to-call from their own verified caller ID. This tool ONLY displays the card — it never places a call itself, and there is no model-callable call tool (UWG § 7: calls are human-initiated only). Optionally scope to one campaign_id; omit it to aggregate all callable leads across the user's campaigns. Use when the user asks to see or call leads (e.g. \"zeig mir anrufbare Leads\", \"welche Leads kann ich anrufen\").",
-          _meta: { ui: { resourceUri: "ui://growthkit/lead-call-card" } },
+          _meta: { ui: { resourceUri: "ui://growthkit/lead-call-card", prefersBorder: true } },
           inputSchema: {
             type: "object",
             properties: {
               campaign_id: { type: "string", description: "Optional campaign UUID (from listCampaigns). Omit to aggregate callable leads across all campaigns." },
               limit: { type: "integer", description: "Max leads to render. Default 50, max 100." },
+            },
+          },
+        },
+        {
+          // APP-PRIVATE (MCP-Apps SEP-1865). Declared in tools/list but marked
+          // _meta.ui.visibility:["app"] so the host HIDES it from the model (it never
+          // appears in the model's tool view) while still accepting the app's
+          // tools/call from the lead-call-card iframe and proxying it here. This is
+          // more robust than omitting the tool — an omitted tool can be rejected by
+          // the host as "unknown" when the iframe calls it. No resourceUri (it renders
+          // nothing). UWG § 7 still holds: the model cannot see or invoke this — only a
+          // human ☎ click inside the card can, via the host bridge.
+          name: "place_call",
+          title: "Place Call (app-private)",
+          description: "APP-PRIVATE: initiates a click-to-call to one lead from the user's own verified caller ID. Not model-callable (hidden via _meta.ui.visibility:[\"app\"]). Invoked only by the lead-call-card iframe when the human clicks ☎ Anrufen. The gk_ session token is taken server-side; the app passes campaign_lead_id only.",
+          _meta: { ui: { visibility: ["app"] } },
+          inputSchema: {
+            type: "object",
+            required: ["campaign_lead_id"],
+            properties: {
+              campaign_lead_id: { type: "string", description: "ID of the campaign lead to call (campaign_lead_id from show_callable_leads' structuredContent)." },
             },
           },
         },
@@ -2256,6 +2284,11 @@ export default {
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
           show_callable_leads:   ["admin", "team", "view"],
+          // App-private call tool. Listed for admin/team (host hides it from the model
+          // via _meta.ui.visibility:["app"] and proxies the iframe's tools/call). Not
+          // listed for view/demo — the card's ☎ button is disabled for them and the
+          // place_call handler hard-rejects those roles anyway.
+          place_call:            ["admin", "team"],
           // Working Memory Tools — session-local, all roles read+write
           setWorkingMemory:      ["admin", "team", "view"],
           getWorkingMemory:      ["admin", "team", "view"],
@@ -2360,11 +2393,11 @@ export default {
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
           show_callable_leads:   ["admin", "team", "view"],
-          // NOTE: place_call is deliberately absent — it is app-private (never in
-          // tools/list, so the model cannot see or call it). It is reachable only
-          // via the host bridge from the lead-call-card iframe, and its handler hard-
-          // gates the role (admin/team only; view/demo rejected). callout-call itself
-          // gates each call by the rep's verified caller ID (per token) on top.
+          // place_call is app-private: in tools/list with _meta.ui.visibility:["app"]
+          // (host hides it from the model, proxies the iframe's tools/call). admin/team
+          // only — the place_call handler hard-rejects view/demo as a second gate, and
+          // callout-call itself gates each call by the rep's verified caller ID.
+          place_call:            ["admin", "team"],
           // Working Memory Tools — session-local, all roles read+write
           setWorkingMemory:      ["admin", "team", "view"],
           getWorkingMemory:      ["admin", "team", "view"],
@@ -2859,8 +2892,8 @@ if (name === "getChapterOverview") {
         }
 
         // === place_call — APP-PRIVATE (Part 3) ===
-        // NOT in tools/list → the model cannot see or invoke it. Reachable only via
-        // the host bridge from the lead-call-card iframe (a human button click).
+        // In tools/list with _meta.ui.visibility:["app"] → the host hides it from the
+        // model and proxies the iframe's tools/call here (a human button click).
         // The gk_ session token is pulled from the session (userToken), NEVER from
         // the iframe payload (sandbox security) — the bridge passes campaign_lead_id
         // only. Forwards 1:1 to the unchanged callout-call edge function.
@@ -3220,18 +3253,19 @@ if (name === "getChapterOverview") {
             content = formatChapterOverview(data);
           }
 
-          // MCP-Apps UI resource (Part 1). Served as text/html so the host renders
-          // it in the sandboxed iframe. Deliberately NOT advertised in resources/list
-          // — the host resolves it from the show_callable_leads tool's
-          // _meta.ui.resourceUri, and keeping it unlisted reduces the chance the model
-          // enumerates/reads the card template itself. Static template: the lead data
-          // is pushed in by the host as the tool's structuredContent.
+          // MCP-Apps UI resource (Part 1, SEP-1865). Served with the MCP-Apps
+          // profile mimeType text/html;profile=mcp-app so the host renders it in the
+          // sandboxed iframe. Deliberately NOT advertised in resources/list — the host
+          // resolves it from the show_callable_leads tool's _meta.ui.resourceUri, and
+          // keeping it unlisted reduces the chance the model enumerates/reads the card
+          // template itself. Static template: the lead data is pushed in by the host as
+          // the ui/notifications/tool-result notification (params.structuredContent).
           else if (uri === "ui://growthkit/lead-call-card") {
             // Inject the session role so the card can disable the ☎ button for
             // read-only (view) / demo sessions (cosmetic; place_call also hard-gates
             // server-side). userRole is a fixed enum (admin|team|view|demo) — safe.
             const cardHtml = LEAD_CALL_CARD_HTML.replace("__GK_ROLE__", userRole);
-            return json({ jsonrpc: "2.0", id, result: { contents: [{ uri, mimeType: "text/html", text: cardHtml }] } });
+            return json({ jsonrpc: "2.0", id, result: { contents: [{ uri, mimeType: "text/html;profile=mcp-app", text: cardHtml }] } });
           }
 
           else {
