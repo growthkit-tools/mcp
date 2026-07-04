@@ -4,3 +4,9 @@ gk-mcp-key.pem
 mcp-publisher
 mcp-publisher_*.tar.gz
 specs/
+
+# Local secrets (never commit — this repo is public)
+.dev.vars
+.dev.vars.*
+.env
+.env.*

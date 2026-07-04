@@ -382,6 +382,292 @@ async function maybeDemoCta(env, accessToken, toolName, client, lang) {
   return `\n\n— ${msg}`;
 }
 
+// ── MCP-Apps UI resource: interactive lead call card ──────────────────────
+// Served (text/html) from resources/read at ui://growthkit/lead-call-card and
+// referenced by the show_callable_leads tool via _meta.ui.resourceUri. The host
+// renders this in a sandboxed iframe and pushes the tool's structuredContent
+// (the { leads: [...] } array) into it. The ☎ button calls the app-private
+// place_call tool through the host bridge — the ONLY way a call is ever placed
+// (UWG §7: human-initiated only). The bridge passes campaign_lead_id only; the
+// gk_ session token is pulled server-side, never from the iframe (sandbox).
+//
+// NOTE (CC → Chris): the MCP-Apps host↔iframe bridge is not settled across
+// clients. This card is defensive — it accepts lead data from the OpenAI Apps
+// global (window.openai.toolOutput), a __MCP_TOOL_OUTPUT__ global, and several
+// postMessage shapes; and it places calls via window.openai.callTool OR a
+// postMessage { type:'tool', payload:{ toolName, params } } round-trip. Confirm
+// the exact shape against Claude's live MCP-Apps host and prune the rest.
+const LEAD_CALL_CARD_HTML = `<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leads anrufen</title>
+<style>
+  /* Design tokens mirrored inline from the chrome-extension styles.css (vc-* classes,
+     read-only source of truth). The iframe can't import that stylesheet, so the values
+     are copied here to keep the card visually identical to the extension "☎ Leads
+     anrufen" card. GrowthKit brand look (single theme, matching the extension). */
+  :root {
+    --gk-accent: #BFFF00;
+    --gk-accent-hover: #D4FF4D;
+    --gk-accent-dim: rgba(191, 255, 0, 0.12);
+    --bg-base: rgb(74, 30, 96);
+    --vc-bg: linear-gradient(135deg, #2D1B4E 0%, #1A0F2E 100%);
+    --vc-border: rgba(191, 255, 0, 0.08);
+    --vc-title: #FFFFFF;
+    --vc-badge: rgba(255, 255, 255, 0.5);
+    --vc-item-bg: rgba(255, 255, 255, 0.04);
+    --vc-item-border: rgba(255, 255, 255, 0.06);
+    --vc-item-title: #FFFFFF;
+    --vc-item-details: rgba(255, 255, 255, 0.5);
+    --vc-ok: #BFFF00;
+    --vc-err: #FF6B6B;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 8px;
+    background: var(--bg-base);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px; -webkit-font-smoothing: antialiased;
+  }
+  .vc-card {
+    background: var(--vc-bg); border: 1px solid var(--vc-border);
+    border-radius: 12px; overflow: hidden;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+  .vc-card-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 0; }
+  .vc-card-title { font-family: 'Montserrat', 'Inter', sans-serif; font-weight: 700; font-size: 14px; color: var(--vc-title); }
+  .vc-card-badge { font-size: 11px; color: var(--vc-badge); font-weight: 500; }
+  .vc-card-body { padding: 12px 16px 16px; }
+  .vc-lead-list { display: flex; flex-direction: column; gap: 8px; }
+  .vc-lead-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--vc-item-bg); border: 1px solid var(--vc-item-border);
+    border-radius: 10px; padding: 10px 12px;
+  }
+  .vc-lead-info { min-width: 0; flex: 1; }
+  .vc-lead-name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; color: var(--vc-item-title); }
+  .vc-lead-meta { margin-top: 2px; font-size: 11.5px; color: var(--vc-item-details); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vc-lead-phone { font-variant-numeric: tabular-nums; }
+  .vc-lead-status { margin-top: 4px; font-size: 11.5px; min-height: 0; }
+  .vc-lead-status.ok { color: var(--vc-ok); }
+  .vc-lead-status.err { color: var(--vc-err); }
+  .vc-action {
+    font-family: 'Inter', -apple-system, sans-serif; font-size: 12px; font-weight: 600;
+    color: var(--gk-accent); background: var(--gk-accent-dim); border: 1px solid var(--vc-border);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .vc-action:hover:not(:disabled) { background: var(--gk-accent); border-color: var(--gk-accent); color: var(--bg-base); }
+  .vc-action:disabled { opacity: 0.5; cursor: default; }
+  .vc-lead-call .vc-action { flex-shrink: 0; white-space: nowrap; }
+  .vc-action-loading { animation: vc-action-pulse 1s ease-in-out infinite; }
+  @keyframes vc-action-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.85; } }
+  .vc-empty, .vc-loading { color: var(--vc-badge); padding: 14px 4px; text-align: center; font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <div class="vc-card vc-lead-call">
+    <div class="vc-card-header">
+      <span class="vc-card-title">&#9742; Leads anrufen</span>
+      <span class="vc-card-badge" id="count"></span>
+    </div>
+    <div class="vc-card-body">
+      <div id="root"><div class="vc-loading">Lade Leads&hellip;</div></div>
+    </div>
+  </div>
+<script>
+(function () {
+  "use strict";
+  var pending = {}, seq = 0, rendered = false;
+  // Session role injected server-side at resources/read (admin | team | view | demo).
+  // view is system-wide read-only → the ☎ button is disabled client-side (cosmetic);
+  // place_call also hard-rejects view server-side.
+  var GK_ROLE = "__GK_ROLE__";
+  var CAN_CALL = GK_ROLE !== "view" && GK_ROLE !== "demo";
+
+  function post(msg) { try { (window.parent || window).postMessage(msg, "*"); } catch (e) {} }
+
+  function extractLeads(o) {
+    if (!o || typeof o !== "object") return null;
+    if (Array.isArray(o.leads)) return o.leads;
+    if (o.structuredContent) { var a = extractLeads(o.structuredContent); if (a) return a; }
+    if (o.toolOutput) { var b = extractLeads(o.toolOutput); if (b) return b; }
+    if (o.result) { var c = extractLeads(o.result); if (c) return c; }
+    return null;
+  }
+
+  function readInitialData() {
+    try { if (window.openai && window.openai.toolOutput) { var a = extractLeads(window.openai.toolOutput); if (a) return a; } } catch (e) {}
+    try { if (window.__MCP_TOOL_OUTPUT__) { var b = extractLeads(window.__MCP_TOOL_OUTPUT__); if (b) return b; } } catch (e) {}
+    return null;
+  }
+
+  // Call an MCP tool through whatever host bridge is present.
+  function callTool(name, args) {
+    try { if (window.openai && typeof window.openai.callTool === "function") { return Promise.resolve(window.openai.callTool(name, args)); } } catch (e) {}
+    return new Promise(function (resolve, reject) {
+      var messageId = "call_" + (++seq) + "_" + Date.now();
+      pending[messageId] = { resolve: resolve, reject: reject };
+      post({ type: "tool", messageId: messageId, payload: { toolName: name, params: args } });
+      setTimeout(function () { if (pending[messageId]) { delete pending[messageId]; reject(new Error("timeout")); } }, 30000);
+    });
+  }
+
+  window.addEventListener("message", function (ev) {
+    var d = (ev && ev.data) || {};
+    var mid = d.messageId || (d.payload && d.payload.messageId);
+    if (mid && pending[mid]) {
+      var p = pending[mid]; delete pending[mid];
+      var errObj = d.error || (d.payload && d.payload.error);
+      if (errObj) { p.reject(new Error("bridge_error")); }
+      else { p.resolve((d.payload && (d.payload.response || d.payload.result || d.payload.toolResult)) || d.result || d.payload || d); }
+      return;
+    }
+    var leads = extractLeads(d) || extractLeads(d.payload) || extractLeads(d.toolOutput);
+    if (leads) render(leads);
+  });
+
+  var ERR_MSG = {
+    caller_id_not_verified: "Bitte zuerst Nummer verifizieren (Extension \\u203a Anrufe).",
+    lead_has_no_phone: "Am Lead fehlt eine Nummer.",
+    lead_not_found: "Lead nicht gefunden.",
+    invalid_token: "Sitzung ung\\u00fcltig \\u2013 bitte neu verbinden.",
+    call_initiation_failed: "Anruf konnte nicht gestartet werden."
+  };
+
+  function interpret(res) {
+    var sc = (res && res.structuredContent) || res || {};
+    // content[].text may carry the JSON when structuredContent is absent
+    if ((sc.ok === undefined) && res && Array.isArray(res.content)) {
+      for (var i = 0; i < res.content.length; i++) {
+        var c = res.content[i];
+        if (c && c.type === "text" && typeof c.text === "string") {
+          try { var parsed = JSON.parse(c.text); if (parsed && typeof parsed === "object") { sc = parsed; break; } } catch (e) {}
+        }
+      }
+    }
+    if (sc.ok === true || sc.call_log_id) return { ok: true, call_log_id: sc.call_log_id };
+    return { ok: false, error: sc.error || "call_failed" };
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
+    });
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return null;
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    try { return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }); } catch (e) { return iso.slice(0, 10); }
+  }
+
+  function metaLine(l) {
+    var parts = [];
+    var n = Number(l.call_count || 0);
+    parts.push(n === 1 ? "1 Anruf" : n + " Anrufe");
+    var when = fmtDate(l.last_call_at);
+    if (when) parts.push("zuletzt " + when + (l.last_call_status ? " (" + esc(l.last_call_status) + ")" : ""));
+    return parts.join(" \\u00b7 ");
+  }
+
+  function onCall(btn, lead, statusEl) {
+    if (!CAN_CALL) return; // hard client guard; server also rejects view/demo
+    btn.disabled = true;
+    btn.className = "vc-action vc-action-loading";
+    var label = btn.textContent;
+    btn.textContent = "ruft an\\u2026";
+    statusEl.className = "vc-lead-status";
+    statusEl.textContent = "";
+    callTool("place_call", { campaign_lead_id: lead.campaign_lead_id }).then(function (res) {
+      var r = interpret(res);
+      btn.className = "vc-action";
+      if (r.ok) {
+        statusEl.className = "vc-lead-status ok";
+        statusEl.textContent = "\\u2713 Dein Telefon klingelt gleich \\u2013 dann verbinden wir den Lead.";
+        btn.textContent = "\\u2713 Anruf gestartet";
+      } else {
+        statusEl.className = "vc-lead-status err";
+        statusEl.textContent = ERR_MSG[r.error] || ("Fehler: " + r.error);
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    }).catch(function () {
+      btn.className = "vc-action";
+      statusEl.className = "vc-lead-status err";
+      statusEl.textContent = "Verbindung zur App fehlgeschlagen. Bitte erneut versuchen.";
+      btn.disabled = false;
+      btn.textContent = label;
+    });
+  }
+
+  function render(leads) {
+    rendered = true;
+    var root = document.getElementById("root");
+    var count = document.getElementById("count");
+    root.innerHTML = "";
+    if (!leads || !leads.length) {
+      count.textContent = "";
+      var e = document.createElement("div");
+      e.className = "vc-empty";
+      e.textContent = "Keine anrufbaren Leads (Leads brauchen eine Telefonnummer).";
+      root.appendChild(e);
+      return;
+    }
+    count.textContent = leads.length === 1 ? "1 Lead" : leads.length + " Leads";
+    var list = document.createElement("div");
+    list.className = "vc-lead-list";
+    leads.forEach(function (l) {
+      var row = document.createElement("div");
+      row.className = "vc-lead-row";
+      var info = document.createElement("div");
+      info.className = "vc-lead-info";
+      var subBits = [];
+      if (l.contact_role) subBits.push(esc(l.contact_role));
+      if (l.company_name) subBits.push(esc(l.company_name));
+      subBits.push('<span class="vc-lead-phone">' + esc(l.contact_phone) + '</span>');
+      var note = CAN_CALL ? "" : '<div class="vc-lead-meta">Nur mit Anruf-Berechtigung</div>';
+      info.innerHTML =
+        '<div class="vc-lead-name">' + (esc(l.contact_name) || "Unbekannt") + '</div>' +
+        '<div class="vc-lead-meta">' + subBits.join(" \\u00b7 ") + '</div>' +
+        '<div class="vc-lead-meta">' + metaLine(l) + '</div>' +
+        note +
+        '<div class="vc-lead-status"></div>';
+      var btn = document.createElement("button");
+      btn.className = "vc-action";
+      btn.type = "button";
+      btn.textContent = "\\u260e Anrufen";
+      if (!CAN_CALL) { btn.disabled = true; btn.title = "Nur mit Anruf-Berechtigung"; }
+      var statusEl = info.querySelector(".vc-lead-status");
+      btn.addEventListener("click", function () { onCall(btn, l, statusEl); });
+      row.appendChild(info);
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+    root.appendChild(list);
+  }
+
+  // Kick off: try synchronous globals, then signal readiness for a data push.
+  var initial = readInitialData();
+  if (initial) { render(initial); }
+  post({ type: "ui-lifecycle", payload: { status: "ready" } });
+  post({ type: "ready" });
+  // Re-poll globals briefly in case the host injects them just after load.
+  var tries = 0;
+  var iv = setInterval(function () {
+    if (rendered) { clearInterval(iv); return; }
+    var l = readInitialData();
+    if (l) { render(l); clearInterval(iv); return; }
+    if (++tries > 20) { clearInterval(iv); }
+  }, 150);
+})();
+</script>
+</body>
+</html>`;
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -1712,6 +1998,19 @@ export default {
           },
         },
         {
+          name: "show_callable_leads",
+          title: "☎ Show Callable Leads",
+          description: "Render an interactive call card of leads that have a phone number, each with a ☎ Anrufen button. The HUMAN user clicks a button to place a click-to-call from their own verified caller ID. This tool ONLY displays the card — it never places a call itself, and there is no model-callable call tool (UWG § 7: calls are human-initiated only). Optionally scope to one campaign_id; omit it to aggregate all callable leads across the user's campaigns. Use when the user asks to see or call leads (e.g. \"zeig mir anrufbare Leads\", \"welche Leads kann ich anrufen\").",
+          _meta: { ui: { resourceUri: "ui://growthkit/lead-call-card" } },
+          inputSchema: {
+            type: "object",
+            properties: {
+              campaign_id: { type: "string", description: "Optional campaign UUID (from listCampaigns). Omit to aggregate callable leads across all campaigns." },
+              limit: { type: "integer", description: "Max leads to render. Default 50, max 100." },
+            },
+          },
+        },
+        {
           name: "setWorkingMemory",
           title: "Working Memory: Set",
           description: "Store structured state for the current chat session. Use this to persist data that must survive history compression — wizard fields, suggestion lists, active entities. Three kinds: 'wizard' (multi-turn field collection), 'working_set' (ephemeral suggestion lists with TTL), 'pinned_entity' (durable context). Call this AFTER the user confirms a value, BEFORE moving to the next step. The state object replaces (not merges) — fetch first if you need to merge.",
@@ -1956,6 +2255,7 @@ export default {
           getCampaignLeadFields: ["admin", "team", "view"],
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
+          show_callable_leads:   ["admin", "team", "view"],
           // Working Memory Tools — session-local, all roles read+write
           setWorkingMemory:      ["admin", "team", "view"],
           getWorkingMemory:      ["admin", "team", "view"],
@@ -1979,6 +2279,7 @@ export default {
           "crmGetPipelines", "crmGetDeal", "crmCheckConnection",
           "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail",
           "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
+          "show_callable_leads",
           "getWorkingMemory", "listTasks", "getOpenTasks",
         ]);
         const DESTRUCTIVE_TOOLS = new Set(["deleteMemories", "clearMemories", "deleteDocument"]);
@@ -2058,6 +2359,12 @@ export default {
           getCampaignLeadFields: ["admin", "team", "view"],
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
+          show_callable_leads:   ["admin", "team", "view"],
+          // NOTE: place_call is deliberately absent — it is app-private (never in
+          // tools/list, so the model cannot see or call it). It is reachable only
+          // via the host bridge from the lead-call-card iframe, and its handler hard-
+          // gates the role (admin/team only; view/demo rejected). callout-call itself
+          // gates each call by the rep's verified caller ID (per token) on top.
           // Working Memory Tools — session-local, all roles read+write
           setWorkingMemory:      ["admin", "team", "view"],
           getWorkingMemory:      ["admin", "team", "view"],
@@ -2507,6 +2814,86 @@ if (name === "getChapterOverview") {
           }
         }
 
+        // === show_callable_leads — MCP-Apps lead call card (Part 2) ===
+        // Reuses the same token→user_id scoping callout-call authorizes calls by
+        // (resolve_user_token === use_api_token both read user_api_tokens.user_id),
+        // so a lead shown here is always one this session may call. Direct PostgREST
+        // (mirrors the reminders path) lets us filter contact_phone != null and
+        // aggregate across campaigns when no campaign_id is given — neither of which
+        // the list_campaign_leads edge action supports. Verified columns only.
+        if (name === "show_callable_leads") {
+          const userId = await resolveUserId(userToken);
+          if (!userId) {
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Failed: could not resolve user for token." }], isError: true } });
+          }
+          const limit = Math.min(Math.max(parseInt(args.limit, 10) || 50, 1), 100);
+          const cols = "id,contact_name,contact_role,company_name,contact_phone,call_count,last_call_at,last_call_status";
+          let q = `${env.SUPABASE_URL}/rest/v1/campaign_leads?user_id=eq.${userId}&contact_phone=not.is.null&select=${cols}&order=company_name.asc&limit=${limit}`;
+          if (args.campaign_id) q += `&campaign_id=eq.${encodeURIComponent(args.campaign_id)}`;
+          try {
+            const res = await fetch(q, { headers: sbHeaders(env) });
+            const rows = await res.json();
+            if (!res.ok) {
+              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Failed to load leads: " + JSON.stringify(rows) }], isError: true } });
+            }
+            const leads = (Array.isArray(rows) ? rows : []).map(r => ({
+              campaign_lead_id: r.id,
+              contact_name: r.contact_name,
+              contact_role: r.contact_role,
+              company_name: r.company_name,
+              contact_phone: r.contact_phone,
+              call_count: r.call_count ?? 0,
+              last_call_at: r.last_call_at,
+              last_call_status: r.last_call_status,
+            }));
+            const scope = args.campaign_id ? " in this campaign" : " across all campaigns";
+            const text = leads.length === 0
+              ? "No callable leads" + scope + " (leads need a phone number)."
+              : (leads.length === 1 ? "1 callable lead" : leads.length + " callable leads") + scope +
+                ". Showing the call card — the user clicks ☎ Anrufen to place a call.";
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }], structuredContent: { leads } } });
+          } catch (e) {
+            console.error("show_callable_leads error:", e);
+            return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Backend error: " + e.message } });
+          }
+        }
+
+        // === place_call — APP-PRIVATE (Part 3) ===
+        // NOT in tools/list → the model cannot see or invoke it. Reachable only via
+        // the host bridge from the lead-call-card iframe (a human button click).
+        // The gk_ session token is pulled from the session (userToken), NEVER from
+        // the iframe payload (sandbox security) — the bridge passes campaign_lead_id
+        // only. Forwards 1:1 to the unchanged callout-call edge function.
+        if (name === "place_call") {
+          // Hard role gate: view is system-wide read-only and demo is never allowed
+          // to trigger a real phone call. This is the authoritative check (the card's
+          // disabled button is only cosmetic). admin/team may call.
+          if (userRole === "view" || userRole === "demo") {
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Calling is not available for your role." }], structuredContent: { ok: false, error: "read_only_role" }, isError: true } });
+          }
+          const leadId = args.campaign_lead_id;
+          if (typeof leadId !== "string" || !leadId) {
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "campaign_lead_id is required" }], structuredContent: { ok: false, error: "invalid_input" }, isError: true } });
+          }
+          try {
+            const res = await fetch(`${env.SUPABASE_URL}/functions/v1/callout-call`, {
+              method: "POST",
+              headers: sbHeaders(env, { "Content-Type": "application/json" }),
+              body: JSON.stringify({ user_token: userToken, campaign_lead_id: leadId }),
+            });
+            let data = {};
+            try { data = await res.json(); } catch (e) { data = {}; }
+            if (res.ok && data && data.ok) {
+              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call initiated (call_log_id " + data.call_log_id + ")." }], structuredContent: { ok: true, call_log_id: data.call_log_id } } });
+            }
+            const errCode = (data && data.error) || ("http_" + res.status);
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call failed: " + errCode }], structuredContent: { ok: false, error: errCode, status: res.status }, isError: true } });
+          } catch (e) {
+            console.error("place_call error:", e);
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call error: " + e.message }], structuredContent: { ok: false, error: "network_error" }, isError: true } });
+          }
+        }
+
         // Map tool names to Edge Function actions and URLs
         const toolConfig = {
           // Memory tools → n8n-embed
@@ -2831,6 +3218,20 @@ if (name === "getChapterOverview") {
               user_token: userToken,
             });
             content = formatChapterOverview(data);
+          }
+
+          // MCP-Apps UI resource (Part 1). Served as text/html so the host renders
+          // it in the sandboxed iframe. Deliberately NOT advertised in resources/list
+          // — the host resolves it from the show_callable_leads tool's
+          // _meta.ui.resourceUri, and keeping it unlisted reduces the chance the model
+          // enumerates/reads the card template itself. Static template: the lead data
+          // is pushed in by the host as the tool's structuredContent.
+          else if (uri === "ui://growthkit/lead-call-card") {
+            // Inject the session role so the card can disable the ☎ button for
+            // read-only (view) / demo sessions (cosmetic; place_call also hard-gates
+            // server-side). userRole is a fixed enum (admin|team|view|demo) — safe.
+            const cardHtml = LEAD_CALL_CARD_HTML.replace("__GK_ROLE__", userRole);
+            return json({ jsonrpc: "2.0", id, result: { contents: [{ uri, mimeType: "text/html", text: cardHtml }] } });
           }
 
           else {
