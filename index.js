@@ -22,6 +22,18 @@
 //                       2026-05-21 for any direct callers.
 // v1.4.0 — 2026-04-24: Added email_compose tool (draft + send via provider-agnostic dispatch).
 
+// ── Server identity — single source of truth (see CLAUDE.md sync invariants) ──
+// Referenced by the initialize response, GET /, and the public MCP Server Card at
+// /.well-known/mcp/server-card.json. Never hardcode these four values again.
+const SERVER_NAME      = "growthkit-mcp";   // MCP serverInfo.name (wire identity)
+const SERVER_VERSION   = "1.10.0";          // == server.json version
+const PROTOCOL_VERSION = "2025-11-25";
+const MCP_ENDPOINT     = "/";               // streamable-http endpoint path
+// Registry identity for the public Server Card — mirrors server.json (kept in sync
+// manually per CLAUDE.md; the Worker can't import server.json at runtime).
+const REGISTRY_NAME      = "tools.growthkit/revenue-intelligence";
+const SERVER_DESCRIPTION = "Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.";
+
 // service_role → sb_secret_ Migration: Key nur auf apikey, kein Bearer (sonst PostgREST "Invalid JWT").
 // Legacy-JWT (eyJ…) behält Bearer, damit der Übergang ohne gesetztes Secret nicht bricht.
 function sbHeaders(env, extra = {}) {
@@ -1125,6 +1137,44 @@ export default {
       );
     }
 
+    // ── MCP Server Card (SEP-1649/2127) — public pre-connect discovery doc ──────
+    // Lets MCP clients (Claude Desktop, Cursor, Cline ≥ v2.1) and the Cloudflare
+    // agent-readiness scan discover this server before connecting. Driftfrei: values
+    // come from the module-level consts (== initialize) + the mirrored registry
+    // identity. tools:"dynamic" — never lists the tools (no drift, no write-tool leak).
+    // $schema omitted (official URL 404s). OPTIONS preflight handled globally above.
+    // Served on the canonical path and the legacy /.well-known/mcp.json (belt-and-braces).
+    if (request.method === "GET" &&
+        (url.pathname === "/.well-known/mcp/server-card.json" || url.pathname === "/.well-known/mcp.json")) {
+      return new Response(
+        JSON.stringify({
+          name: REGISTRY_NAME,
+          version: SERVER_VERSION,
+          protocolVersion: PROTOCOL_VERSION,
+          description: SERVER_DESCRIPTION,
+          homepage: "https://growthkit.tools/en/mcp",
+          documentationUrl: "https://growthkit.tools/en/mcp",
+          iconUrl: "https://growthkit.tools/favicon.ico",
+          serverUrl: BASE_URL + MCP_ENDPOINT,
+          transport: { type: "streamable-http", endpoint: MCP_ENDPOINT },
+          capabilities: { tools: { listChanged: false } },
+          authentication: {
+            required: true,
+            schemes: ["oauth2", "bearer"],
+            resourceMetadata: BASE_URL + "/.well-known/oauth-protected-resource",
+          },
+          tools: "dynamic",
+        }),
+        {
+          headers: {
+            "content-type": "application/json",
+            "cache-control": "public, max-age=3600",
+            ...CORS_HEADERS,
+          },
+        }
+      );
+    }
+
     async function sha256Hex(input) {
       const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
       return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
@@ -1161,7 +1211,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/") {
-      return json({ name: "growthkit-mcp", version: "1.10.0", protocol: "2025-11-25", status: "running" });
+      return json({ name: SERVER_NAME, version: SERVER_VERSION, protocol: PROTOCOL_VERSION, status: "running" });
     }
 
     if (request.method === "POST" && url.pathname === "/") {
@@ -1246,9 +1296,9 @@ export default {
         return json({
           jsonrpc: "2.0", id,
           result: {
-            protocolVersion: "2025-11-25",
+            protocolVersion: PROTOCOL_VERSION,
             capabilities: { prompts: { listChanged: false }, resources: { listChanged: false }, tools: { listChanged: false } },
-            serverInfo: { name: "growthkit-mcp", title: "GrowthKit Memory Assistant", version: "1.10.0" },
+            serverInfo: { name: SERVER_NAME, title: "GrowthKit Memory Assistant", version: SERVER_VERSION },
           },
         });
       }

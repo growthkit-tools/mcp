@@ -56,3 +56,24 @@ but the host hides it from the model and only proxies the lead-call-card iframe'
 already satisfies UWG § 7. (This replaced the earlier catalog-hiding approach of
 omitting `place_call` from `tools/list`; an omitted tool can be rejected by the host
 as "unknown" when the iframe calls it.)
+
+## Discovery-Files — Sync-Invarianten (nie brechen)
+
+Single Source of Truth: SERVER_NAME / SERVER_VERSION / PROTOCOL_VERSION / MCP_ENDPOINT
+sind Module-Level-Consts in index.js. BEIDES liest sie:
+- die initialize-Response
+- /.well-known/mcp/server-card.json
+→ Diese vier Werte NIE zweimal hardcoden.
+
+server.json (Registry-Publish): name / version / description MÜSSEN mit der Card
+übereinstimmen. Bei Version-Bump: (1) const in index.js, (2) server.json,
+(3) ggf. Registry-Re-Publish. Die Card fällt automatisch aus der const.
+
+tools: Card nutzt "tools": "dynamic" → kein Per-Tool-Sync. tools/list bleibt die
+einzige Quelle des tatsächlichen Tool-Sets.
+
+OAuth-Triplet — müssen konsistent auf dieselbe Resource/AS zeigen:
+- /.well-known/oauth-protected-resource
+- /.well-known/oauth-authorization-server
+- authentication.resourceMetadata in der server-card.json
+Ändern sich OAuth-Endpoints → alle drei anpassen.
