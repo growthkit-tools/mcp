@@ -1,3 +1,6 @@
+// v1.12.1 — 2026-07-18: mcp_calls hard-cap message shows the effective limit
+//                       (gk_meter effective_limit, honoring limit_override) instead of
+//                       the static MCP_CALLS_LIMIT constant. Display-only.
 // v1.12.0 — 2026-07-18: Metering enforcement — write tools (everything not in
 //                       READ_ONLY_TOOLS) are metered as mcp_calls via gk_meter before
 //                       dispatch; over-limit blocks with an upgrade message (reads free,
@@ -43,7 +46,7 @@
 // Referenced by the initialize response, GET /, and the public MCP Server Card at
 // /.well-known/mcp/server-card.json. Never hardcode these four values again.
 const SERVER_NAME      = "growthkit-mcp";   // MCP serverInfo.name (wire identity)
-const SERVER_VERSION   = "1.12.0";          // == server.json version
+const SERVER_VERSION   = "1.12.1";          // == server.json version
 const PROTOCOL_VERSION = "2025-11-25";
 const MCP_ENDPOINT     = "/";               // streamable-http endpoint path
 // Registry identity for the public Server Card — mirrors server.json (kept in sync
@@ -1111,10 +1114,11 @@ export default {
     async function gkMeterMcp(userId, metric, limit, amount = 1) {
       try {
         const { data, ok } = await callRpc("gk_meter", { p_user: userId, p_metric: metric, p_limit: limit, p_amount: amount });
-        if (!ok) return { over_limit: false, new_count: 0, ok: false };
+        if (!ok) return { over_limit: false, new_count: 0, effective_limit: limit, ok: false };
         const row = Array.isArray(data) ? data[0] : data;
-        return { over_limit: !!(row && row.over_limit), new_count: (row && row.new_count) || 0, ok: true };
-      } catch { return { over_limit: false, new_count: 0, ok: false }; }
+        const eff = (row && row.effective_limit != null) ? row.effective_limit : limit;
+        return { over_limit: !!(row && row.over_limit), new_count: (row && row.new_count) || 0, effective_limit: eff, ok: true };
+      } catch { return { over_limit: false, new_count: 0, effective_limit: limit, ok: false }; }
     }
 
     // Helper: format search results into readable resource content
@@ -2868,7 +2872,7 @@ export default {
           if (meterUserId) {
             const mm = await gkMeterMcp(meterUserId, "mcp_calls", MCP_CALLS_LIMIT);
             if (mm.over_limit) {
-              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "You've reached your monthly write limit (" + MCP_CALLS_LIMIT + "). Reads remain available — upgrade your plan to keep writing." }], isError: true } });
+              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "You've reached your monthly write limit (" + (mm.effective_limit != null ? mm.effective_limit : MCP_CALLS_LIMIT) + "). Reads remain available — upgrade your plan to keep writing." }], isError: true } });
             }
           }
         }
