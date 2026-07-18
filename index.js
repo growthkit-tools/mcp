@@ -1,3 +1,10 @@
+// v1.11.0 — 2026-07-18: Added discoverSimilar tool (Lookalike-Discovery). Thin
+//                       wrapper over the n8n-proxy enrichment engine
+//                       (provider:'enrichment', action:'discover_similar'); passes
+//                       through mode/seed/filters/score/limit and returns the ranked
+//                       candidates 1:1 (similarity_to_seed / canonical_icp_score /
+//                       divergence / classification / already_in_crm). Read-only.
+//                       mode='account' (Hunter similar_to) needs a Hunter Premium key.
 // v1.10.0 — 2026-06-30: Playbook prompt bodies moved to private Edge (n8n-embed
 //                       get_prompt) behind growth/pro plan-gate. Worker keeps only
 //                       prompt metadata for prompts/list; prompts/get fetches body.
@@ -26,7 +33,7 @@
 // Referenced by the initialize response, GET /, and the public MCP Server Card at
 // /.well-known/mcp/server-card.json. Never hardcode these four values again.
 const SERVER_NAME      = "growthkit-mcp";   // MCP serverInfo.name (wire identity)
-const SERVER_VERSION   = "1.10.0";          // == server.json version
+const SERVER_VERSION   = "1.11.0";          // == server.json version
 const PROTOCOL_VERSION = "2025-11-25";
 const MCP_ENDPOINT     = "/";               // streamable-http endpoint path
 // Registry identity for the public Server Card — mirrors server.json (kept in sync
@@ -2074,6 +2081,20 @@ export default {
             email: { type: "string", description: "Email address to verify for deliverability." },
           }},
         },
+        {
+          name: "discoverSimilar",
+          title: "Discover Similar Companies",
+          description: "Find lookalike companies for a seed and re-rank them by fit. mode='account' (seed={domain}) finds companies similar to that domain via Hunter similar_to; mode='icp' (no seed) discovers companies matching your saved ICP; mode='won_deals' is not yet implemented. Each candidate comes back with similarity_to_seed (0–100 firmographic closeness to the seed), canonical_icp_score (0–100 vs your global ICP; null if not on the Pro plan), divergence + divergence_flag (≥25 = seed diverges from ICP — a product signal), classification, and already_in_crm. Read-only — it never writes and never reveals emails/phones (do that per-lead separately). NOTE: mode='account' uses Hunter `similar_to`, which requires a Hunter Premium/Data-Platform key; without it, discovery automatically falls back to query/industry filters and says so in `warnings`.",
+          inputSchema: { type: "object", properties: {
+            mode: { type: "string", enum: ["account", "icp", "won_deals"], description: "account = similar to a seed domain (default); icp = match your saved ICP; won_deals = not yet implemented (returns not_implemented)." },
+            seed: { type: "object", description: "Seed for mode='account', e.g. { domain: 'intertours.de' }. Leave empty for icp/won_deals.", properties: {
+              domain: { type: "string", description: "Seed company domain." },
+            }},
+            filters: { type: "object", description: "Optional Hunter Discover filter overrides passed straight through: headquarters_location, headcount (enum buckets), industry {include,exclude}, keywords, query." },
+            score: { type: "boolean", description: "Re-rank with canonical ICP scoring (calculate-alignment). Default true. similarity_to_seed is always returned regardless of this flag." },
+            limit: { type: "integer", description: "Max candidates to return (hard-capped at 25). Default 25." },
+          }},
+        },
         // Lead Scoring Tools (Phase 1b)
         {
           name: "scoreLeads",
@@ -2645,6 +2666,7 @@ export default {
           findContacts: ["admin", "team"],
           findEmail: ["admin", "team"],
           verifyEmail: ["admin", "team"],
+          discoverSimilar: ["admin", "team"],
           // Lead Scoring Tools (Phase 1b)
           scoreLeads:  ["admin", "team"],
           getTopLeads: ["admin", "team", "view"],
@@ -2686,7 +2708,7 @@ export default {
           "crmSearchCompany", "crmGetCompany", "crmGetCompanyDeals", "crmGetCompanyContacts",
           "crmSearchContact", "crmListCompanies", "crmListPeople", "crmGetContact",
           "crmGetPipelines", "crmGetDeal", "crmCheckConnection",
-          "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail",
+          "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail", "discoverSimilar",
           "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
           "show_callable_leads",
           "getWorkingMemory", "listTasks", "getOpenTasks",
@@ -2755,6 +2777,7 @@ export default {
           findContacts: ["admin", "team"],
           findEmail: ["admin", "team"],
           verifyEmail: ["admin", "team"],
+          discoverSimilar: ["admin", "team"],
           // Lead Scoring Tools (Phase 1b) — mirrors toolRoleMap; keep in sync.
           scoreLeads:  ["admin", "team"],
           getTopLeads: ["admin", "team", "view"],
@@ -3092,6 +3115,7 @@ if (name === "getChapterOverview") {
           findContacts: "find_contacts",
           findEmail: "find_email",
           verifyEmail: "verify_email",
+          discoverSimilar: "discover_similar",
         };
 
         if (enrichActions[name]) {
