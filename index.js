@@ -1,3 +1,9 @@
+// v1.12.0 — 2026-07-18: Metering enforcement — write tools (everything not in
+//                       READ_ONLY_TOOLS) are metered as mcp_calls via gk_meter before
+//                       dispatch; over-limit blocks with an upgrade message (reads free,
+//                       fails open on meter error). READ_ONLY_TOOLS lifted to module
+//                       scope (shared by tools/list + tools/call). discoverSimilar gains
+//                       a shortlist_size param (selective-enrich cost control).
 // v1.11.1 — 2026-07-18: discoverSimilar description — documented Hunter's exact
 //                       filter sub-shapes (headquarters_location include:[{country:ISO2}],
 //                       keywords {include,match}, industry {include,exclude}, headcount
@@ -37,13 +43,33 @@
 // Referenced by the initialize response, GET /, and the public MCP Server Card at
 // /.well-known/mcp/server-card.json. Never hardcode these four values again.
 const SERVER_NAME      = "growthkit-mcp";   // MCP serverInfo.name (wire identity)
-const SERVER_VERSION   = "1.11.1";          // == server.json version
+const SERVER_VERSION   = "1.12.0";          // == server.json version
 const PROTOCOL_VERSION = "2025-11-25";
 const MCP_ENDPOINT     = "/";               // streamable-http endpoint path
 // Registry identity for the public Server Card — mirrors server.json (kept in sync
 // manually per CLAUDE.md; the Worker can't import server.json at runtime).
 const REGISTRY_NAME      = "tools.growthkit/revenue-intelligence";
 const SERVER_DESCRIPTION = "Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.";
+
+// Read-only tools (MCP readOnlyHint + free from mcp_calls metering). Module-scoped so
+// BOTH tools/list (annotation) and tools/call (write metering) share one source of
+// truth. Enrichment/discover tools live here too — they're read-only-hint and already
+// metered by their own metrics (enrichments / discover_searches), so mcp_calls skips them.
+const READ_ONLY_TOOLS = new Set([
+  "searchMemory", "listMemories", "countMemories", "getChapterOverview",
+  "listDocuments", "getDocument", "listReminders", "getHistory", "listDeleted",
+  "listTeam", "checkNotifications",
+  "crmSearchCompany", "crmGetCompany", "crmGetCompanyDeals", "crmGetCompanyContacts",
+  "crmSearchContact", "crmListCompanies", "crmListPeople", "crmGetContact",
+  "crmGetPipelines", "crmGetDeal", "crmCheckConnection",
+  "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail", "discoverSimilar",
+  "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
+  "show_callable_leads",
+  "getWorkingMemory", "listTasks", "getOpenTasks",
+]);
+// Interim monthly cap for mcp_calls (write tools). Real tier limits arrive with
+// packaging (c366dcab) via usage_counters/gk_meter's p_limit. TUNE.
+const MCP_CALLS_LIMIT = 100000;
 
 // service_role → sb_secret_ Migration: Key nur auf apikey, kein Bearer (sonst PostgREST "Invalid JWT").
 // Legacy-JWT (eyJ…) behält Bearer, damit der Übergang ohne gesetztes Secret nicht bricht.
@@ -1080,6 +1106,17 @@ export default {
       return ok && typeof data === "string" ? data : null;
     }
 
+    // Meter a metered ('write') action via gk_meter. Fails OPEN on any error so a
+    // metering outage never blocks the product. Returns { over_limit, new_count, ok }.
+    async function gkMeterMcp(userId, metric, limit, amount = 1) {
+      try {
+        const { data, ok } = await callRpc("gk_meter", { p_user: userId, p_metric: metric, p_limit: limit, p_amount: amount });
+        if (!ok) return { over_limit: false, new_count: 0, ok: false };
+        const row = Array.isArray(data) ? data[0] : data;
+        return { over_limit: !!(row && row.over_limit), new_count: (row && row.new_count) || 0, ok: true };
+      } catch { return { over_limit: false, new_count: 0, ok: false }; }
+    }
+
     // Helper: format search results into readable resource content
     function formatResourceContent(title, searchResponse) {
       const results = searchResponse?.results || [];
@@ -2088,7 +2125,7 @@ export default {
         {
           name: "discoverSimilar",
           title: "Discover Similar Companies",
-          description: "Find lookalike companies for a seed and re-rank them by fit. mode='account' (seed={domain}) finds companies similar to that domain via Hunter similar_to; mode='icp' (no seed) discovers companies matching your saved ICP; mode='won_deals' is not yet implemented. Each candidate comes back with similarity_to_seed (0–100 firmographic closeness to the seed), canonical_icp_score (0–100 vs your global ICP; null if not on the Pro plan), divergence + divergence_flag (≥25 = seed diverges from ICP — a product signal), classification, and already_in_crm. Read-only — it never writes and never reveals emails/phones (do that per-lead separately). NOTE: mode='account' uses Hunter `similar_to`, which requires a Hunter Premium/Data-Platform key; without it, discovery automatically falls back to query/industry filters and says so in `warnings`.",
+          description: "Find lookalike companies for a seed and re-rank them by fit. mode='account' (seed={domain}) finds companies similar to that domain via Hunter similar_to; mode='icp' (no seed) discovers companies matching your saved ICP; mode='won_deals' is not yet implemented. Each candidate comes back with similarity_to_seed (0–100 firmographic closeness to the seed), canonical_icp_score (0–100 vs your global ICP; null if not on the Pro plan), divergence + divergence_flag (≥25 = seed diverges from ICP — a product signal), classification, and already_in_crm. Read-only — it never writes and never reveals emails/phones (do that per-lead separately). To control cost, only the top `shortlist_size` pre-ranked candidates are fully enriched + scored; the rest come back with enriched:false and null scores (candidates with enriched:false were NOT evaluated — null is 'not scored', not a low score). NOTE: mode='account' uses Hunter `similar_to`, which requires a Hunter Premium/Data-Platform key; without it, discovery automatically falls back to query/industry filters and says so in `warnings`.",
           inputSchema: { type: "object", properties: {
             mode: { type: "string", enum: ["account", "icp", "won_deals"], description: "account = similar to a seed domain (default); icp = match your saved ICP; won_deals = not yet implemented (returns not_implemented)." },
             seed: { type: "object", description: "Seed for mode='account', e.g. { domain: 'intertours.de' }. Leave empty for icp/won_deals.", properties: {
@@ -2097,6 +2134,7 @@ export default {
             filters: { type: "object", description: "Optional Hunter Discover filter overrides, passed straight through. Use Hunter's exact sub-shapes — a wrong shape is silently dropped (or 400s). headquarters_location: { include:[{ country:'DE' }], exclude:[...] } — country is ISO-3166 alpha-2; continent / business_region / state / city are also supported inside those objects (NOT { countries:[...] }). keywords: { include:[...], exclude:[...], match:'any'|'all' } (NOT a flat array — flat → HTTP 400 invalid_keywords). industry: { include:[...], exclude:[...] }. headcount: array of enum buckets ('1-10','11-50','51-200','201-500','501-1000','1001-5000','5001-10000','10001+')." },
             score: { type: "boolean", description: "Re-rank with canonical ICP scoring (calculate-alignment). Default true. similarity_to_seed is always returned regardless of this flag." },
             limit: { type: "integer", description: "Max candidates to return (hard-capped at 25). Default 25." },
+            shortlist_size: { type: "integer", description: "How many top pre-ranked candidates get fully enriched + scored (default 10). Pre-ranking uses the free discover fields (geo, size, emails_count). Lower = cheaper (fewer enrichment credits); the rest are returned unevaluated (enriched:false, null scores)." },
           }},
         },
         // Lead Scoring Tools (Phase 1b)
@@ -2704,19 +2742,8 @@ export default {
         };
 
         // Tool annotations (MCP readOnlyHint/destructiveHint) for registry/client
-        // labeling and Claude Connectors directory submission.
-        const READ_ONLY_TOOLS = new Set([
-          "searchMemory", "listMemories", "countMemories", "getChapterOverview",
-          "listDocuments", "getDocument", "listReminders", "getHistory", "listDeleted",
-          "listTeam", "checkNotifications",
-          "crmSearchCompany", "crmGetCompany", "crmGetCompanyDeals", "crmGetCompanyContacts",
-          "crmSearchContact", "crmListCompanies", "crmListPeople", "crmGetContact",
-          "crmGetPipelines", "crmGetDeal", "crmCheckConnection",
-          "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail", "discoverSimilar",
-          "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
-          "show_callable_leads",
-          "getWorkingMemory", "listTasks", "getOpenTasks",
-        ]);
+        // labeling and Claude Connectors directory submission. READ_ONLY_TOOLS is
+        // module-scoped (shared with tools/call write metering).
         const DESTRUCTIVE_TOOLS = new Set(["deleteMemories", "clearMemories", "deleteDocument"]);
         const annotate = (t) => ({
           ...t,
@@ -2830,6 +2857,19 @@ export default {
           const rl = await checkDemoRateLimit(env, request);
           if (!rl.allowed) {
             return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "The GrowthKit demo is rate-limited to keep it available for everyone. Please wait a minute and try again — or see https://growthkit.tools/en/pricing to get your own unthrottled workspace." }], isError: true } });
+          }
+        }
+
+        // Meter mcp_calls on WRITE tools (reads free; enrichment/discover metered on their
+        // own metrics; demo has its own rate limit). Hard-cap → block with an upgrade
+        // message. Fails open if the meter is unavailable.
+        if (userRole !== "demo" && !READ_ONLY_TOOLS.has(name)) {
+          const meterUserId = await resolveUserId(userToken);
+          if (meterUserId) {
+            const mm = await gkMeterMcp(meterUserId, "mcp_calls", MCP_CALLS_LIMIT);
+            if (mm.over_limit) {
+              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "You've reached your monthly write limit (" + MCP_CALLS_LIMIT + "). Reads remain available — upgrade your plan to keep writing." }], isError: true } });
+            }
           }
         }
 

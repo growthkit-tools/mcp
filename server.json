@@ -3,7 +3,7 @@
   "name": "tools.growthkit/revenue-intelligence",
   "title": "GrowthKit Revenue Intelligence",
   "description": "Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.",
-  "version": "1.11.1",
+  "version": "1.12.0",
   "websiteUrl": "https://growthkit.tools/en/mcp",
   "repository": {
     "url": "https://github.com/growthkit-tools/mcp",
