@@ -1,3 +1,7 @@
+// v1.11.1 — 2026-07-18: discoverSimilar description — documented Hunter's exact
+//                       filter sub-shapes (headquarters_location include:[{country:ISO2}],
+//                       keywords {include,match}, industry {include,exclude}, headcount
+//                       bucket enum) so agents pass them correctly. Description-only.
 // v1.11.0 — 2026-07-18: Added discoverSimilar tool (Lookalike-Discovery). Thin
 //                       wrapper over the n8n-proxy enrichment engine
 //                       (provider:'enrichment', action:'discover_similar'); passes
@@ -33,7 +37,7 @@
 // Referenced by the initialize response, GET /, and the public MCP Server Card at
 // /.well-known/mcp/server-card.json. Never hardcode these four values again.
 const SERVER_NAME      = "growthkit-mcp";   // MCP serverInfo.name (wire identity)
-const SERVER_VERSION   = "1.11.0";          // == server.json version
+const SERVER_VERSION   = "1.11.1";          // == server.json version
 const PROTOCOL_VERSION = "2025-11-25";
 const MCP_ENDPOINT     = "/";               // streamable-http endpoint path
 // Registry identity for the public Server Card — mirrors server.json (kept in sync
@@ -2090,7 +2094,7 @@ export default {
             seed: { type: "object", description: "Seed for mode='account', e.g. { domain: 'intertours.de' }. Leave empty for icp/won_deals.", properties: {
               domain: { type: "string", description: "Seed company domain." },
             }},
-            filters: { type: "object", description: "Optional Hunter Discover filter overrides passed straight through: headquarters_location, headcount (enum buckets), industry {include,exclude}, keywords, query." },
+            filters: { type: "object", description: "Optional Hunter Discover filter overrides, passed straight through. Use Hunter's exact sub-shapes — a wrong shape is silently dropped (or 400s). headquarters_location: { include:[{ country:'DE' }], exclude:[...] } — country is ISO-3166 alpha-2; continent / business_region / state / city are also supported inside those objects (NOT { countries:[...] }). keywords: { include:[...], exclude:[...], match:'any'|'all' } (NOT a flat array — flat → HTTP 400 invalid_keywords). industry: { include:[...], exclude:[...] }. headcount: array of enum buckets ('1-10','11-50','51-200','201-500','501-1000','1001-5000','5001-10000','10001+')." },
             score: { type: "boolean", description: "Re-rank with canonical ICP scoring (calculate-alignment). Default true. similarity_to_seed is always returned regardless of this flag." },
             limit: { type: "integer", description: "Max candidates to return (hard-capped at 25). Default 25." },
           }},
