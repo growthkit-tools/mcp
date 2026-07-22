@@ -1555,7 +1555,7 @@ export default {
           {
             name: "listMemories",
             title: "List Memories",
-            description: "List stored memories with pagination. Filter by chapter using metadata_filter.chapter.",
+            description: "List stored memories in stored order with pagination. Unlike searchMemory (semantic relevance ranking), use this to browse, enumerate, or audit a chapter — not to find the most relevant memory for a question. Filter by chapter via metadata_filter.chapter.",
             inputSchema: {
               type: "object",
               properties: {
@@ -1608,7 +1608,7 @@ export default {
           {
             name: "countMemories",
             title: "Count Memories",
-            description: "Count memories, optionally filtered by chapter via metadata_filter.chapter.",
+            description: "Return only counts, not content — use for overview/sizing (e.g. 'how many competitor memories exist?') before deciding whether to list or search. Optionally filter by chapter via metadata_filter.chapter. For a per-chapter breakdown in one call, prefer getChapterOverview.",
             inputSchema: {
               type: "object",
               properties: { metadata_filter: { type: "object", description: "Optional metadata filters. Use chapter to count within a specific chapter.", additionalProperties: { type: "string" } } },
@@ -1693,7 +1693,7 @@ export default {
           {
             name: "deleteDocument",
             title: "Delete Document",
-            description: "Delete a document and its associated insights.",
+            description: "Delete a document and its associated insights. Irreversible — always confirm with the user first.",
             inputSchema: {
               type: "object",
               required: ["document_id"],
@@ -1721,7 +1721,7 @@ export default {
           {
             name: "listReminders",
             title: "List Reminders",
-            description: "List reminders. Filter by status.",
+            description: "List reminders, ordered by remind_at ascending. By default returns only pending reminders; pass status=sent|cancelled|all to widen. Optionally scope to one task via task_id. Returns each reminder's id, title, remind_at, and status.",
             inputSchema: {
               type: "object",
               properties: {
@@ -1855,7 +1855,7 @@ export default {
         {
           name: "crmGetCompanyDeals",
           title: "CRM: Get Company Deals",
-          description: "Get all deals linked to a company.",
+          description: "Get all deals linked to a company, by company ID. Use after crmSearchCompany or crmGetCompany to review that company's pipeline.",
           inputSchema: { type: "object", required: ["id"], properties: {
             id: { type: "string", description: "Company ID." },
           }},
@@ -1863,7 +1863,7 @@ export default {
         {
           name: "crmGetCompanyContacts",
           title: "CRM: Get Company Contacts",
-          description: "Get all contacts linked to a company.",
+          description: "Get all contacts linked to a company, by company ID. Use to find who to reach at a known company.",
           inputSchema: { type: "object", required: ["id"], properties: {
             id: { type: "string", description: "Company ID." },
           }},
@@ -1871,7 +1871,7 @@ export default {
         {
           name: "crmSearchContact",
           title: "CRM: Search Contact",
-          description: "Search CRM for a contact by name.",
+          description: "Search CRM for a contact by name or keyword (fuzzy match); returns the top matches. Use to look up one known person. For structured segment queries across the contact base (e.g. 'all CEOs in pipeline companies'), use crmListPeople instead.",
           inputSchema: { type: "object", required: ["term"], properties: {
             term: { type: "string", description: "Contact name or keyword." },
             limit: { type: "integer", description: "Max results. Default: 10." },
@@ -1933,7 +1933,7 @@ export default {
 {
   name: "crmListPeople",
   title: "CRM: List People",
-  description: "List people/contacts from CRM with structured filters. Use for segment queries like 'all CEOs in pipeline companies'. All filter fields optional.",
+  description: "List people/contacts from CRM with structured filters. Use for segment queries like 'all CEOs in pipeline companies'. All filter fields optional. Unlike crmSearchContact (fuzzy lookup of one person by name), this does precise structured filtering across the contact base. Returns contacts with id, name, title, company, and pagination info.",
   inputSchema: {
     type: "object",
     properties: {
@@ -2030,7 +2030,7 @@ export default {
         {
           name: "crmGetDeal",
           title: "CRM: Get Deal",
-          description: "Get full deal details by ID.",
+          description: "Get the full record for one deal by ID. Use after a search or list returns a deal id when you need its complete details.",
           inputSchema: { type: "object", required: ["id"], properties: {
             id: { type: "string", description: "Deal ID." },
           }},
@@ -2038,7 +2038,7 @@ export default {
         {
           name: "crmAddNote",
           title: "CRM: Add Note",
-          description: "Add a note to a deal, company, or contact.",
+          description: "Add a note to a CRM record — a deal, company, or contact. Provide content (HTML supported) and at least one target id (deal_id, company_id, or contact_id). Use to log call summaries, context, or decisions against the record.",
           inputSchema: { type: "object", required: ["content"], properties: {
             content: { type: "string", description: "Note text — supports HTML." },
             deal_id: { type: "string", description: "Optional deal ID to attach the note to." },
@@ -2049,7 +2049,7 @@ export default {
         {
           name: "crmCreateActivity",
           title: "CRM: Create Activity",
-          description: "Create a follow-up task/call/meeting.",
+          description: "Create a follow-up activity on a CRM record. Provide a subject and set type (call | meeting | task | email | deadline; default task). Optionally link it to a deal, company, or contact and set a due_date (YYYY-MM-DD). Use to schedule next steps after an interaction.",
           inputSchema: { type: "object", required: ["subject"], properties: {
             subject: { type: "string", description: "Activity subject." },
             type: { type: "string", enum: ["call", "meeting", "task", "email", "deadline"], description: "Activity type. Default: task." },
@@ -2652,7 +2652,7 @@ export default {
           {
             name: "toggleStep",
             title: "Toggle Step",
-            description: "Hakt einen Step eines Tasks ab/an. done weglassen = flippen.",
+            description: "Check off or re-open a single step in a task's checklist. Provide the task `id` and the `step_id` of the step to toggle. Omit `done` to flip the step's current state; set done=true/false to force a specific state (idempotent). Use when the user completes or reopens a checklist item on a task that has steps.",
             inputSchema: {
               type: "object",
               required: ["id", "step_id"],
