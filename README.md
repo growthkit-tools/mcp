@@ -3,11 +3,11 @@
 [![smithery badge](https://smithery.ai/badge/growthkit/revenue-intelligence)](https://smithery.ai/server/growthkit/revenue-intelligence)
 [![Glama badge](https://glama.ai/mcp/servers/growthkit-tools/mcp/badges/score.svg)](https://glama.ai/mcp/servers/growthkit-tools/mcp)
 
-> Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.
+> Sales intelligence for B2B SMEs — lead scoring, ICP fit, CRM enrichment & writeback.
 
 **GrowthKit Revenue Intelligence** is a remote [Model Context Protocol](https://modelcontextprotocol.io) server that gives Claude, ChatGPT, Cursor and other MCP clients a persistent, structured GTM brain: a chaptered long-term marketing memory, ICP-based lead scoring, CRM enrichment, and — uniquely — **strategy writeback into your CRM** rather than just into a dashboard.
 
-It is built for owner-led B2B companies in the DACH/EU mid-market that don't have a dedicated GTM team to wire all of this together by hand.
+It is built for owner-led B2B companies that don't have a dedicated GTM team to wire all of this together by hand — with first-class support for the DACH/EU mid-market (German UI, EU-compliant).
 
 - **Homepage:** https://growthkit.tools/en/mcp
 - **Server URL:** `https://mcp.growthkit.tools`

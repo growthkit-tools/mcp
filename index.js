@@ -46,13 +46,13 @@
 // Referenced by the initialize response, GET /, and the public MCP Server Card at
 // /.well-known/mcp/server-card.json. Never hardcode these four values again.
 const SERVER_NAME      = "growthkit-mcp";   // MCP serverInfo.name (wire identity)
-const SERVER_VERSION   = "1.12.1";          // == server.json version
+const SERVER_VERSION   = "1.12.2";          // == server.json version
 const PROTOCOL_VERSION = "2025-11-25";
 const MCP_ENDPOINT     = "/";               // streamable-http endpoint path
 // Registry identity for the public Server Card — mirrors server.json (kept in sync
 // manually per CLAUDE.md; the Worker can't import server.json at runtime).
 const REGISTRY_NAME      = "tools.growthkit/revenue-intelligence";
-const SERVER_DESCRIPTION = "Sales intelligence for DACH & EU SMEs — lead scoring, ICP fit, CRM enrichment & writeback.";
+const SERVER_DESCRIPTION = "Sales intelligence for B2B SMEs — lead scoring, ICP fit, CRM enrichment & writeback.";
 
 // Read-only tools (MCP readOnlyHint + free from mcp_calls metering). Module-scoped so
 // BOTH tools/list (annotation) and tools/call (write metering) share one source of
