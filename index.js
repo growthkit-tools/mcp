@@ -1031,14 +1031,18 @@ export default {
     const BASE_URL = "https://mcp.growthkit.tools";
 
     // Read-only demo surface. ONLY these tools are exposed/allowed when a session
-    // is is_demo. Every entry returns real data from the seeded demo workspace and
-    // never calls a paid third-party API or performs a write/side-effect.
-    // Deliberately EXCLUDED: all writes, all CRM tools (would return setup_required),
-    // enrich*/find*/verifyEmail, scoreLeads, email_compose, sendNotification.
+    // is is_demo. Every entry returns real data from the seeded demo workspace
+    // (incl. the seeded campaign + 9 scored "ScaleUp Metrics" leads) and performs
+    // no external write — writes stay demo-simulated server-side; place_call
+    // additionally hard-rejects demo in its handler.
+    // Deliberately EXCLUDED: all writes, all crm* tools (external CRM connector,
+    // setup_required/empty in demo), enrich*/find*/verifyEmail, email_compose,
+    // sendNotification.
     const DEMO_TOOLS = new Set([
       "getChapterOverview", "searchMemory", "listMemories", "countMemories", "getHistory",
       "listTasks", "getOpenTasks",
       "listCampaigns", "getCampaign", "listCampaignLeads", "getCampaignLeadFields",
+      "getTopLeads", "scoreLeads", "show_callable_leads",
       "listDocuments", "getDocument", "listReminders",
     ]);
 
