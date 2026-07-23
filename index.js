@@ -2753,15 +2753,39 @@ export default {
           toggleStep:     ["admin", "team"],
         };
 
-        // Tool annotations (MCP readOnlyHint/destructiveHint) for registry/client
-        // labeling and Claude Connectors directory submission. READ_ONLY_TOOLS is
-        // module-scoped (shared with tools/call write metering).
-        const DESTRUCTIVE_TOOLS = new Set(["deleteMemories", "clearMemories", "deleteDocument"]);
+        // Tool annotations (MCP readOnlyHint/destructiveHint/openWorldHint) for
+        // registry/client labeling and Claude Connectors directory submission.
+        // READ_ONLY_TOOLS is module-scoped (shared with tools/call write metering).
+        // Classification rule: reads → readOnlyHint:true; additive writes (create
+        // only, nothing overwritten) → destructiveHint:false; destructive = deletes,
+        // overwrites existing values, or irreversible real-world effects.
+        const DESTRUCTIVE_TOOLS = new Set([
+          // Deletes / cancels
+          "deleteMemories", "clearMemories", "deleteDocument", "cancelReminder",
+          // Overwrites existing values
+          "updateMemory", "restoreVersion", "setWorkingMemory", "updateCampaign",
+          "updateCampaignLead", "updateTask", "crmUpdateDeal", "save_call_outcome",
+          // Irreversible real-world effects (e-mail dispatch, phone call)
+          "email_compose", "place_call",
+        ]);
+        // External-API tools (CRM bridge, enrichment/discovery providers, e-mail
+        // dispatch, telephony) — MCP openWorldHint: reaches beyond the workspace.
+        const OPEN_WORLD_TOOLS = new Set([
+          "crmSearchCompany", "crmGetCompany", "crmCreateCompany", "crmGetCompanyDeals",
+          "crmGetCompanyContacts", "crmSearchContact", "crmListCompanies", "crmListPeople",
+          "crmGetContact", "crmCreateContact", "crmGetPipelines", "crmCreateDeal",
+          "crmUpdateDeal", "crmGetDeal", "crmAddNote", "crmCreateActivity", "crmCheckConnection",
+          "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail",
+          "discoverSimilar", "email_compose", "place_call",
+        ]);
         const annotate = (t) => ({
           ...t,
-          annotations: READ_ONLY_TOOLS.has(t.name)
-            ? { readOnlyHint: true }
-            : { readOnlyHint: false, destructiveHint: DESTRUCTIVE_TOOLS.has(t.name) },
+          annotations: {
+            ...(READ_ONLY_TOOLS.has(t.name)
+              ? { readOnlyHint: true }
+              : { readOnlyHint: false, destructiveHint: DESTRUCTIVE_TOOLS.has(t.name) }),
+            ...(OPEN_WORLD_TOOLS.has(t.name) ? { openWorldHint: true } : {}),
+          },
         });
 
         // Unauthenticated discovery (no token) returns the FULL catalog so
