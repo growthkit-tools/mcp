@@ -2,10 +2,12 @@
 // listing, Glama-hosted container) or any MCP client speaks to the shim.
 //
 // Stateless mode: every POST /mcp builds a fresh Server+Transport pair bound to
-// the request's resolved gk_ token (or demo). Session config arrives per the
-// current Smithery session-config spec as flat query params (default delivery:
-// ?gkToken=…) — an x-gk-token header and the legacy ?config=<base64 json> form
-// are accepted too. No config at all → demo mode.
+// the request's resolved gk_ token (or demo). Session config arrives depending
+// on the Smithery flow: the container/gateway deploy sends ?config=<base64 JSON>
+// (→ cfg.gkToken), the URL-publish flow sends flat query params (?gkToken=…);
+// an x-gk-token header works too. No config at all → demo mode. tools/list and
+// initialize NEVER require user auth (Smithery lazy-loading contract) — the
+// demo path covers them.
 
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -24,7 +26,7 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Max-Age": "86400",
 };
 
-/** Resolve the session's gk_ token from header / query / legacy config / env. */
+/** Resolve the session's gk_ token from header / flat query / base64 config / env. */
 function resolveGkToken(url: URL, req: IncomingMessage): string | null {
   const header = req.headers["x-gk-token"];
   if (looksLikeGkToken(header)) return header;
@@ -32,10 +34,12 @@ function resolveGkToken(url: URL, req: IncomingMessage): string | null {
   const qp = url.searchParams.get("gkToken");
   if (looksLikeGkToken(qp)) return qp;
 
-  const legacy = url.searchParams.get("config");
-  if (legacy) {
+  // Smithery container/gateway delivery: ?config=<base64(JSON)> → cfg.gkToken.
+  // (Buffer.from(…, "base64") accepts base64 AND base64url alphabets.)
+  const b64 = url.searchParams.get("config");
+  if (b64) {
     try {
-      const parsed = JSON.parse(Buffer.from(legacy, "base64").toString("utf8"));
+      const parsed = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
       if (looksLikeGkToken(parsed?.gkToken)) return parsed.gkToken;
     } catch {
       /* malformed config → fall through to demo */
@@ -87,9 +91,20 @@ const httpServer = createHttpServer(async (req, res) => {
     return;
   }
 
+  // Streamable-HTTP method routing (Smithery routes GET/POST/DELETE to /mcp):
+  // - DELETE = session close. Stateless server → nothing to tear down; ack
+  //   cleanly with 204 (never a 500).
+  // - GET = standalone SSE stream. This shim runs in stateless JSON-response
+  //   mode with no server-initiated messages, so per MCP spec it answers 405
+  //   with an Allow header.
+  if (req.method === "DELETE") {
+    res.writeHead(204, CORS_HEADERS);
+    res.end();
+    return;
+  }
   if (req.method !== "POST") {
-    // Stateless mode: no SSE stream to resume (GET) and no session to end (DELETE).
-    json(res, 405, { error: "method_not_allowed" });
+    res.writeHead(405, { Allow: "POST, DELETE", "Content-Type": "application/json", ...CORS_HEADERS });
+    res.end(JSON.stringify({ error: "method_not_allowed" }));
     return;
   }
 

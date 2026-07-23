@@ -23,8 +23,9 @@ Directory gateway / MCP client  →  [shim]  →  mcp.growthkit.tools
   programmatically and caches the resulting `is_demo` access token. All demo
   safety is enforced **server-side** by the GrowthKit Worker (read-only tool
   allowlist, per-IP rate limit, simulated writes) — the shim only selects the
-  token, and additionally curates `tools/list` down to the tools that return
-  rich demo data (memory suite + campaign/lead scoring core).
+  token, and additionally curates `tools/list` to the read tools that return
+  real data on a DIRECT call (memory suite + campaign/lead reads — mirrored
+  from the llm-router demo suffix's allowed-reads list).
 - **With `gkToken` config →** the same OAuth flow runs with your `gk_` token;
   you get the full tool set for your token's role, real workspace data, no
   demo filtering.
@@ -70,22 +71,37 @@ docker run --rm -p 8080:8080 growthkit-directory-shim
 
 Config only — no code changes needed:
 
-- **Glama:** connect the public repo → Glama builds from this Dockerfile and
-  hosts the shim → listing + tool calls in their inspector. No self-hosting
-  needed.
-- **Smithery** ([URL-based publishing](https://smithery.ai/docs/build/publish.md)
-  — container builds via smithery.yaml no longer exist): needs a reachable URL.
-  Run this same container on Cloudflare Containers, Fly.io or Railway, then:
+- **Smithery (primary — serverless container deploy, free hosting, counted
+  tool calls):** connect the repo, set **Base Directory = `mcp-directory-shim`**
+  in the deploy settings (this folder holds `smithery.yaml` + `Dockerfile`;
+  without the base directory Smithery would build the whole repo), deploy.
+  Smithery builds the container, hosts it serverless (~2 min idle timeout —
+  the shim is stateless, a cold start just re-mints the cached demo token) and
+  routes MCP traffic to `/mcp`. Playground calls go through Smithery's gateway
+  and are counted. Session config arrives as `?config=<base64 JSON>`, which
+  this shim decodes natively; two contracts are honored by design:
+  1. `initialize` + `tools/list` never require user auth (lazy loading) — no
+     config simply means demo mode.
+  2. An empty `gkToken` (the `exampleConfig` default) falls through to demo.
+
+  *Doc-drift note (2026-07-23):* Smithery's container docs pages are currently
+  404 (docs restructure towards CLI publishing); the `smithery.yaml` format
+  here matches the last documented schema used by many deployed servers. If
+  the dashboard no longer offers the GitHub container deploy, fall back to
+  URL-based publishing: run this container on Cloudflare Containers, Fly.io or
+  Railway, then
 
   ```bash
   smithery mcp publish "https://<your-host>/mcp" -n @growthkit-tools/growthkit-demo \
     --config-schema '{"type":"object","properties":{"gkToken":{"type":"string","title":"GrowthKit token (optional)","description":"Your gk_ workspace token. Leave empty to explore the read-only demo workspace."}}}'
   ```
 
-  The Smithery gateway forwards session config as flat query params
-  (`?gkToken=…` — the default `x-from` delivery), which this shim reads
-  natively. An MCPB/stdio release is also possible via `dist/stdio.js` if a
-  local distribution is wanted later.
+  (URL-publish forwards config as flat query params, `?gkToken=…` — also
+  supported.) An MCPB/stdio release via `dist/stdio.js` is possible too.
+
+- **Glama:** the same container is the artifact for Glama's free Dockerfile
+  build (quality score); the repo is already listed via `glama.json` at repo
+  root. Glama's paid gateway is deliberately not part of this plan.
 
 ## Rate limiting
 

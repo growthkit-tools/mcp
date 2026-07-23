@@ -26,7 +26,7 @@ export function serverInstructions(gkToken: string | null): string {
   return gkToken === null
     ? "GrowthKit demo workspace (fictional 'ScaleUp Metrics GmbH', read-only). " +
       "Explore the GTM memory (getChapterOverview → searchMemory) and the seeded " +
-      "campaign with scored leads (listCampaigns → getTopLeads). " +
+      "campaign with 9 scored leads (listCampaigns → listCampaignLeads). " +
       "Bring your own gk_ token (gkToken config) to work with your real workspace."
     : "GrowthKit workspace session — full tool set per your token's role.";
 }

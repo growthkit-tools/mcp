@@ -1,0 +1,37 @@
+# Smithery custom-container deploy für den GrowthKit Directory-Shim.
+#
+# Ablage im Unterordner ist Absicht (Monorepo-Pattern): in den Smithery-Deploy-
+# Settings MUSS Base Directory = mcp-directory-shim gesetzt werden, sonst baut
+# Smithery das ganze Repo. Pfade unten sind relativ zur Base Directory.
+#
+# Hinweis Doku-Drift (Stand 2026-07-23): Smitherys Container-Doku-Seiten
+# (docs/build/deployments/custom-container, docs/build/project-config/smithery.yaml)
+# sind aktuell 404 — das Schema hier entspricht dem zuletzt dokumentierten und
+# in zahlreichen gelisteten Servern deployten Format (runtime: container).
+# Fallback, falls der GitHub-Container-Deploy im Dashboard nicht mehr angeboten
+# wird: URL-basiertes Publish (siehe README, "Hosting & publishing").
+
+runtime: "container"
+
+startCommand:
+  type: http            # Streamable-HTTP (nicht stdio) — Server lauscht auf $PORT, MCP auf /mcp
+
+build:
+  dockerfile: Dockerfile          # relativ zur Base Directory (mcp-directory-shim/)
+  dockerBuildPath: .              # Build-Context = Shim-Ordner
+
+# Optionaler User-Key. FEHLT er → Shim defaultet auf Demo-Token → Demo-Mode.
+# Deshalb NICHTS required — sonst bricht Vertrag 1 (Tool-Listing ohne Auth):
+# initialize + tools/list dürfen nie an fehlendem User-Token scheitern.
+configSchema:
+  type: object
+  required: []
+  properties:
+    gkToken:
+      type: string
+      title: "GrowthKit API token (optional)"
+      description: "Leer lassen für die Demo (fiktive Firma, keine echten Daten). Eigener gk_-Token → dein echter Workspace."
+
+# Beispiel, das Smithery im Playground vorbefüllt. Leer = Demo-Pfad.
+exampleConfig:
+  gkToken: ""
