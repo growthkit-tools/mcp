@@ -1,0 +1,13 @@
+# Cloudflare Worker config for the directory shim's URL-deploy surface.
+# Stateless proxy — no Durable Objects, no KV; all state (token cache,
+# demo throttle) is in-memory per isolate, upstream limits are the backstop.
+name = "growthkit-directory-shim"
+main = "src/worker.ts"
+compatibility_date = "2026-06-01"
+# nodejs_compat: AsyncLocalStorage inside the agents SDK + process.env in
+# upstream.ts (populated from vars at this compatibility date).
+compatibility_flags = ["nodejs_compat"]
+
+# Upstream override for local testing only, e.g.:
+#   npx wrangler dev --var GK_UPSTREAM_URL:http://localhost:8787
+# Production default is https://mcp.growthkit.tools (hardcoded fallback).

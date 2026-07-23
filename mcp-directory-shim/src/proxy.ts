@@ -1,6 +1,6 @@
 // MCP SDK wrapper around the shim core — used by the stdio entry (local
-// Inspector tests). The Cloudflare Worker entry (src/worker.ts) speaks
-// JSON-RPC directly and does not go through the SDK.
+// Inspector tests), the Node http entry (src/http.ts) and the Cloudflare
+// Worker entry (src/worker.ts).
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
