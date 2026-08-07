@@ -2153,15 +2153,19 @@ export default {
         {
           name: "scoreLeads",
           title: "Lead Scoring: Run",
-          description: "Trigger lead scoring against ICP for this user's CRM companies. Scores each (company, contact) pair on 4 dimensions (industry 35%, employees 25%, geo 20%, seniority 20%) with missing-data renormalization. Use mode='full' for all companies, 'delta' for new/changed since last run, 'company_ids' for specific IDs. Persists to lead_scores table; read results via getTopLeads. Returns counts and per-user summary. Requires Pro plan (active or trialing). Write-operation — scores are persisted to lead_scores table.",
+          description: "Trigger ICP lead scoring. Two independent modes — choose by WHERE the leads live, they do not overlap. (1) CAMPAIGN MODE — mode='campaign' plus campaign_id: scores the leads of one campaign (campaign_leads). Use this whenever the request is about a campaign, an imported/uploaded lead list, or leads that are not in a CRM. Needs no CRM connection and no Pro plan. Scores are written back onto the campaign's leads; read them via listCampaignLeads (score / completeness per lead). (2) CRM MODE — mode='full' | 'delta' | 'company_ids': scores this user's connected CRM companies. 'full' = every company (slow for >1k), 'delta' = only those new or changed since the last run (recommended for routine updates), 'company_ids' = a specific list. Persists to the lead_scores table; read results via getTopLeads. Requires a connected CRM and a Pro plan (active or trialing). If the user has no CRM or no Pro plan, campaign mode is the only mode that will work. Both modes score on the same 4 dimensions (industry 35%, employees 25%, geo 20%, seniority 20%) with missing-data renormalization and return counts plus a per-user summary. Write-operation — it persists scores.",
           inputSchema: {
             type: "object",
             required: ["mode"],
             properties: {
               mode: {
                 type: "string",
-                enum: ["full", "delta", "company_ids"],
-                description: "Scoring scope. 'full' scores all companies (slow for >1k). 'delta' scores only companies updated since last run or not yet scored (recommended for routine updates). 'company_ids' scores a specific list (requires company_ids).",
+                enum: ["campaign", "full", "delta", "company_ids"],
+                description: "Which leads to score. 'campaign' scores the leads of one campaign and REQUIRES campaign_id — no CRM and no Pro plan needed. The other three target the connected CRM and require Pro: 'full' scores all CRM companies (slow for >1k), 'delta' only those updated since the last run or not yet scored (recommended for routine updates), 'company_ids' a specific list (requires company_ids).",
+              },
+              campaign_id: {
+                type: "string",
+                description: "UUID of the campaign whose leads to score. REQUIRED when mode='campaign'; ignored in the CRM modes. Get it from listCampaigns.",
               },
               company_ids: {
                 type: "array",
