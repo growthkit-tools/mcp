@@ -3337,14 +3337,25 @@ if (name === "getChapterOverview") {
         // (mirrors the reminders path) lets us filter contact_phone != null and
         // aggregate across campaigns when no campaign_id is given — neither of which
         // the list_campaign_leads edge action supports. Verified columns only.
+        //
+        // Identity + phone live on `leads` since the 17.07.2026 n:m split
+        // (20260717190208_leads_split_2b_drop_legacy_columns) — read them through the
+        // lead_id join, exactly like n8n-embed:list_campaign_leads. `!inner` is load-
+        // bearing twice: lead_id is a NOT NULL FK so no membership is ever dropped, and
+        // only an inner embed lets the `leads.contact_phone` filter restrict the
+        // top-level rows.
         if (name === "show_callable_leads") {
           const userId = await resolveUserId(userToken);
           if (!userId) {
             return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Failed: could not resolve user for token." }], isError: true } });
           }
           const limit = Math.min(Math.max(parseInt(args.limit, 10) || 50, 1), 100);
-          const cols = "id,contact_name,contact_role,company_name,contact_phone,call_count,last_call_at,last_call_status";
-          let q = `${env.SUPABASE_URL}/rest/v1/campaign_leads?user_id=eq.${userId}&contact_phone=not.is.null&select=${cols}&order=company_name.asc&limit=${limit}`;
+          const cols = "id,call_count,last_call_at,last_call_status,leads!inner(contact_name,contact_role,company_name,contact_phone)";
+          // Ordered by the membership's created_at (a campaign_leads column) rather than
+          // company_name: PostgREST cannot order the top level by an embedded column, and
+          // ordering server-side is what makes `limit` deterministic. The alphabetical
+          // sort the card shows is applied to the returned page below.
+          let q = `${env.SUPABASE_URL}/rest/v1/campaign_leads?user_id=eq.${userId}&leads.contact_phone=not.is.null&select=${cols}&order=created_at.desc&limit=${limit}`;
           if (args.campaign_id) q += `&campaign_id=eq.${encodeURIComponent(args.campaign_id)}`;
           try {
             const res = await fetch(q, { headers: sbHeaders(env) });
@@ -3352,16 +3363,21 @@ if (name === "getChapterOverview") {
             if (!res.ok) {
               return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Failed to load leads: " + JSON.stringify(rows) }], isError: true } });
             }
-            const leads = (Array.isArray(rows) ? rows : []).map(r => ({
-              campaign_lead_id: r.id,
-              contact_name: r.contact_name,
-              contact_role: r.contact_role,
-              company_name: r.company_name,
-              contact_phone: r.contact_phone,
-              call_count: r.call_count ?? 0,
-              last_call_at: r.last_call_at,
-              last_call_status: r.last_call_status,
-            }));
+            // Flatten the joined identity back to the top level — the card JS and the
+            // structuredContent contract both read flat keys (l.contact_name, …).
+            const leads = (Array.isArray(rows) ? rows : []).map(r => {
+              const lead = r.leads || {};
+              return {
+                campaign_lead_id: r.id,
+                contact_name: lead.contact_name,
+                contact_role: lead.contact_role,
+                company_name: lead.company_name,
+                contact_phone: lead.contact_phone,
+                call_count: r.call_count ?? 0,
+                last_call_at: r.last_call_at,
+                last_call_status: r.last_call_status,
+              };
+            }).sort((a, b) => (a.company_name || "").localeCompare(b.company_name || ""));
             const scope = args.campaign_id ? " in this campaign" : " across all campaigns";
             const text = leads.length === 0
               ? "No callable leads" + scope + " (leads need a phone number)."
