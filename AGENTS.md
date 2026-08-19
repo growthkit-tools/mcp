@@ -73,7 +73,9 @@ Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
 
 1. **Kein manuelles `wrangler deploy`.** Deploy passiert ausschließlich über Push.
    Manueller Deploy erzeugt unsichtbare Drift zwischen Repo-Stand und Live-Worker.
-2. **Keine GitHub-Action fürs Deployment hinzufügen.** Die Abwesenheit ist Absicht.
+2. Keine GitHub-Action fürs Deployment. Deploy und Preview-Upload gehören Cloudflare
+    Workers Builds. Actions dürfen ausschließlich testen und proben — nie deployen, nie
+    wrangler deploy/versions upload aufrufen.
 3. 🔵 **ENTSCHEIDUNG — Autonomie-Grenze:**
    - Commit + Push auf **Feature-Branch**: erlaubt
    - Push auf `main`: **nie**
@@ -105,8 +107,13 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 10. **OAuth-Triplet** muss konsistent auf dieselbe Resource/AS zeigen:
     `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`,
     `authentication.resourceMetadata` in der Card. Ändern sich OAuth-Endpoints → alle drei.
-11. **`ui/initialize` MUSS `protocolVersion: "2026-01-26"` enthalten.** Fehlt es, schlägt
-    der Client still fehl — keine Fehlermeldung, kein Log, nur „geht nicht". *(Beobachtet.)*
+11. Zwei Protokoll-Versionen — absichtlich verschieden, nie vereinheitlichen.
+    PROTOCOL_VERSION (Const) ist die MCP-Kernprotokoll-Version und speist initialize
+    und die server-card. ui/initialize (MCP-Apps/ext-apps) hat eine eigene, separate
+    Version — sie ist ein bewusst eigenständiger Literal, kein vergessener Hardcode und
+    keine Verletzung von Leitplanke 7. Fehlt oder stimmt sie nicht, schlägt der Client
+    still fehl: keine Fehlermeldung, kein Log, nur „geht nicht". (Beobachtet.)
+    Beide Werte gehören in den Golden Master, damit eine versehentliche Angleichung rot wird.
 
 ### Compliance — `place_call`
 
