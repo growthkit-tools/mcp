@@ -1,0 +1,805 @@
+[
+  {
+    "meta": null,
+    "name": "addCampaignLeads",
+    "props": [
+      "campaign_id",
+      "leads",
+      "source"
+    ],
+    "required": [
+      "campaign_id",
+      "leads"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "cancelReminder",
+    "props": [
+      "reminder_id"
+    ],
+    "required": [
+      "reminder_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "checkNotifications",
+    "props": [],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "clearMemories",
+    "props": [
+      "change_reason"
+    ],
+    "required": [
+      "change_reason"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "countMemories",
+    "props": [
+      "metadata_filter"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "createCampaign",
+    "props": [
+      "briefing_source",
+      "channels",
+      "description",
+      "end_date",
+      "icp_snapshot",
+      "messaging_angle",
+      "name",
+      "notes",
+      "offer",
+      "pain_hypothesis",
+      "persona_snapshot",
+      "product_snapshot",
+      "source_document_id",
+      "start_date",
+      "success_metric"
+    ],
+    "required": [
+      "channels",
+      "icp_snapshot",
+      "messaging_angle",
+      "name",
+      "offer",
+      "pain_hypothesis",
+      "persona_snapshot",
+      "start_date",
+      "success_metric"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "createReminder",
+    "props": [
+      "channel",
+      "channel_target",
+      "description",
+      "remind_at",
+      "repeat",
+      "task_id",
+      "title"
+    ],
+    "required": [
+      "remind_at",
+      "title"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "createTask",
+    "props": [
+      "bucket",
+      "confidence",
+      "detail",
+      "effort_constraint",
+      "effort_nonconstraint",
+      "impact",
+      "owner",
+      "related_memory_id",
+      "steps",
+      "title"
+    ],
+    "required": [
+      "title"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmAddNote",
+    "props": [
+      "company_id",
+      "contact_id",
+      "content",
+      "deal_id"
+    ],
+    "required": [
+      "content"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmCheckConnection",
+    "props": [],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "crmCreateActivity",
+    "props": [
+      "company_id",
+      "contact_id",
+      "deal_id",
+      "due_date",
+      "note",
+      "subject",
+      "type"
+    ],
+    "required": [
+      "subject"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmCreateCompany",
+    "props": [
+      "address",
+      "name"
+    ],
+    "required": [
+      "name"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmCreateContact",
+    "props": [
+      "company_id",
+      "email",
+      "name",
+      "phone"
+    ],
+    "required": [
+      "name"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmCreateDeal",
+    "props": [
+      "company_id",
+      "contact_id",
+      "currency",
+      "stage_id",
+      "title",
+      "value"
+    ],
+    "required": [
+      "stage_id",
+      "title"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmGetCompany",
+    "props": [
+      "id"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmGetCompanyContacts",
+    "props": [
+      "id"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmGetCompanyDeals",
+    "props": [
+      "id"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmGetContact",
+    "props": [
+      "id"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmGetDeal",
+    "props": [
+      "id"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmGetPipelines",
+    "props": [],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "crmListCompanies",
+    "props": [
+      "filter"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "crmListPeople",
+    "props": [
+      "filter"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "crmSearchCompany",
+    "props": [
+      "limit",
+      "term"
+    ],
+    "required": [
+      "term"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmSearchContact",
+    "props": [
+      "limit",
+      "term"
+    ],
+    "required": [
+      "term"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "crmUpdateDeal",
+    "props": [
+      "expected_close",
+      "id",
+      "stage_id",
+      "title",
+      "value"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "deleteDocument",
+    "props": [
+      "document_id"
+    ],
+    "required": [
+      "document_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "deleteMemories",
+    "props": [
+      "change_reason",
+      "embedding_ids"
+    ],
+    "required": [
+      "change_reason",
+      "embedding_ids"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "discoverSimilar",
+    "props": [
+      "filters",
+      "limit",
+      "mode",
+      "score",
+      "seed",
+      "shortlist_size"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "email_compose",
+    "props": [
+      "body_html",
+      "body_text",
+      "crm_deal_id",
+      "from",
+      "in_reply_to",
+      "mode",
+      "provider",
+      "subject",
+      "thread_id",
+      "to"
+    ],
+    "required": [
+      "mode",
+      "subject",
+      "to"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "embedMemory",
+    "props": [
+      "content",
+      "items",
+      "metadata"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "enrichCompany",
+    "props": [
+      "company_name",
+      "domain"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "enrichPerson",
+    "props": [
+      "email",
+      "linkedin_handle",
+      "linkedin_url"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "findContacts",
+    "props": [
+      "company",
+      "department",
+      "domain",
+      "limit",
+      "seniority"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "findEmail",
+    "props": [
+      "company",
+      "domain",
+      "first_name",
+      "full_name",
+      "last_name"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "getCampaign",
+    "props": [
+      "campaign_id"
+    ],
+    "required": [
+      "campaign_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "getCampaignLeadFields",
+    "props": [
+      "campaign_id"
+    ],
+    "required": [
+      "campaign_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "getChapterOverview",
+    "props": [],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "getDocument",
+    "props": [
+      "document_id"
+    ],
+    "required": [
+      "document_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "getHistory",
+    "props": [
+      "embedding_id"
+    ],
+    "required": [
+      "embedding_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "getOpenTasks",
+    "props": [
+      "limit"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "getTopLeads",
+    "props": [
+      "filters",
+      "limit",
+      "min_score"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "getWorkingMemory",
+    "props": [
+      "key",
+      "kind",
+      "session_id"
+    ],
+    "required": [
+      "key",
+      "kind",
+      "session_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "listCampaignLeads",
+    "props": [
+      "campaign_id",
+      "enrichment_status",
+      "lifecycle_stage",
+      "limit"
+    ],
+    "required": [
+      "campaign_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "listCampaigns",
+    "props": [
+      "limit",
+      "status"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "listDeleted",
+    "props": [
+      "limit"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "listDocuments",
+    "props": [
+      "category",
+      "chapter",
+      "limit",
+      "offset"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "listMemories",
+    "props": [
+      "limit",
+      "metadata_filter",
+      "offset"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "listReminders",
+    "props": [
+      "limit",
+      "status",
+      "task_id"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "listTasks",
+    "props": [
+      "bucket",
+      "limit",
+      "owner",
+      "status"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "listTeam",
+    "props": [],
+    "required": []
+  },
+  {
+    "meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    },
+    "name": "place_call",
+    "props": [
+      "campaign_lead_id"
+    ],
+    "required": [
+      "campaign_lead_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "restoreVersion",
+    "props": [
+      "version_id"
+    ],
+    "required": [
+      "version_id"
+    ]
+  },
+  {
+    "meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    },
+    "name": "save_call_outcome",
+    "props": [
+      "call_log_id",
+      "disposition",
+      "next_action",
+      "notes"
+    ],
+    "required": [
+      "call_log_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "scoreLeads",
+    "props": [
+      "campaign_id",
+      "company_ids",
+      "mode"
+    ],
+    "required": [
+      "mode"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "searchMemory",
+    "props": [
+      "limit",
+      "match_threshold",
+      "metadata_filter",
+      "query"
+    ],
+    "required": [
+      "query"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "sendNotification",
+    "props": [
+      "broadcast",
+      "context",
+      "message",
+      "to_prefix"
+    ],
+    "required": [
+      "message"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "setTaskWeights",
+    "props": [
+      "label_constraint",
+      "label_nonconstraint",
+      "w_constraint",
+      "w_nonconstraint"
+    ],
+    "required": [
+      "w_constraint",
+      "w_nonconstraint"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "setWorkingMemory",
+    "props": [
+      "key",
+      "kind",
+      "session_id",
+      "state",
+      "status",
+      "ttl_turns"
+    ],
+    "required": [
+      "key",
+      "kind",
+      "session_id",
+      "state"
+    ]
+  },
+  {
+    "meta": {
+      "ui": {
+        "prefersBorder": true,
+        "resourceUri": "ui://growthkit/lead-call-card"
+      }
+    },
+    "name": "show_callable_leads",
+    "props": [
+      "campaign_id",
+      "limit"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "toggleStep",
+    "props": [
+      "done",
+      "id",
+      "step_id"
+    ],
+    "required": [
+      "id",
+      "step_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "updateCampaign",
+    "props": [
+      "campaign_id",
+      "channels",
+      "end_date",
+      "icp_snapshot",
+      "messaging_angle",
+      "name",
+      "notes",
+      "offer",
+      "pain_hypothesis",
+      "persona_snapshot",
+      "product_snapshot",
+      "start_date",
+      "status",
+      "success_metric"
+    ],
+    "required": [
+      "campaign_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "updateCampaignLead",
+    "props": [
+      "lead_id",
+      "updates"
+    ],
+    "required": [
+      "lead_id",
+      "updates"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "updateMemory",
+    "props": [
+      "change_reason",
+      "embedding_id",
+      "new_content",
+      "new_metadata"
+    ],
+    "required": [
+      "change_reason",
+      "embedding_id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "updateTask",
+    "props": [
+      "bucket",
+      "confidence",
+      "detail",
+      "effort_constraint",
+      "effort_nonconstraint",
+      "id",
+      "impact",
+      "owner",
+      "status",
+      "steps",
+      "title"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "uploadDocument",
+    "props": [
+      "category",
+      "chapter",
+      "description",
+      "extract_insights",
+      "file_base64",
+      "filename",
+      "mime_type",
+      "title"
+    ],
+    "required": [
+      "file_base64",
+      "filename",
+      "mime_type"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "verifyEmail",
+    "props": [
+      "email"
+    ],
+    "required": [
+      "email"
+    ]
+  }
+]
