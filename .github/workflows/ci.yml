@@ -1,7 +1,7 @@
 name: ci
 
 # WICHTIG (AGENTS.md §2): Diese Action testet und probt AUSSCHLIESSLICH.
-# Sie deployt nie. Deploy und Preview-Upload gehören Cloudflare Workers Builds.
+# Sie deployt nie. Deploy und Preview-Upload gehoeren Cloudflare Workers Builds.
 # Niemals `wrangler deploy` oder `wrangler versions upload` hier aufrufen.
 
 on:
@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: read
-  statuses: read
+  checks: read
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -32,14 +32,13 @@ jobs:
       - run: npm ci
 
       # Cloudflares Build-Umgebung blockiert postinstall-Scripts (npm 10.9 allow-scripts).
-      # Ob der GH-Runner das auch tut, ist offen — der Step macht die Abhaengigkeit
-      # explizit und schadet nicht. workerd ist die Runtime, in der vitest-pool-workers
-      # die Tests ausfuehrt; ohne die Binary laeuft kein einziger Test.
+      # workerd ist die Runtime, in der vitest-pool-workers die Tests ausfuehrt;
+      # ohne die Binary laeuft kein einziger Test.
       - run: npm rebuild workerd esbuild
 
-      # --passWithNoTests: solange tests/ noch keine *.test.js enthaelt, soll das
-      # nicht rot sein. ENTFERNEN, sobald der erste echte Test existiert — sonst
-      # maskiert das Flag spaeter eine kaputte Test-Discovery.
+      # --passWithNoTests: solange tests/ keine *.test.js enthaelt, soll das nicht
+      # rot sein. ENTFERNEN, sobald der erste echte Test existiert — sonst maskiert
+      # das Flag spaeter eine kaputte Test-Discovery.
       - run: npx --no-install vitest run --passWithNoTests
 
   # ---------------------------------------------------------------------------
@@ -49,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Auf Cloudflare-Build warten
+      - name: Auf Workers Build warten
         id: wait
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,40 +56,42 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -uo pipefail
-          # Kein fixes sleep: der Commit-Status wird gepollt, bis Cloudflare meldet.
-          # Fixe Wartezeiten proben mal gegen den alten Build und verschwenden mal Minuten.
+          # Workers Builds meldet als GitHub App ueber die CHECKS-API, nicht ueber
+          # die Statuses-API. /commits/{sha}/status liefert dort immer n:0 — der
+          # probe-Job wurde dadurch bei JEDEM Lauf uebersprungen (verifiziert 19.08.).
           #
-          # TODO verifizieren: exakter Context-Name des Workers-Builds-Status.
-          #   gh api repos/$REPO/commits/$SHA/status --jq '.statuses[].context'
+          # Exakter Name-Match: aus diesem Repo bauen ZWEI Worker,
+          # growthkit-mcp und growthkit-mcp-demo. Ein Teilstring-Match wuerde
+          # auf den falschen warten.
           for i in $(seq 1 40); do
-            RAW=$(gh api "repos/$REPO/commits/$SHA/status" 2>/dev/null || echo '{}')
-            CTX=$(echo "$RAW" | jq -c '[.statuses[]? | select(.context | ascii_downcase | test("cloudflare|workers"))] | .[0] // empty')
+            RAW=$(gh api "repos/$REPO/commits/$SHA/check-runs" 2>/dev/null || echo '{}')
+            CTX=$(echo "$RAW" | jq -c '[.check_runs[]? | select(.name == "Workers Builds: growthkit-mcp")] | .[0] // empty')
 
             if [ -z "$CTX" ]; then
-              # Kein Cloudflare-Status = kein Build ausgeloest. Normalfall bei Commits,
-              # die nur Build-watch-excluded Pfade anfassen (.github/**, *.md, specs/**).
-              # Kein Fehler — der Probe wird uebersprungen.
+              # Kein Check-Run = kein Build ausgeloest. Normalfall bei Commits, die
+              # nur Build-watch-excluded Pfade anfassen (.github/**, *.md, specs/**).
               if [ "$i" -ge 8 ]; then
                 echo "skip=true" >> "$GITHUB_OUTPUT"
-                echo "::notice::Kein Cloudflare-Build fuer diesen Commit — Probe uebersprungen."
-                echo "Vorhandene Contexts:"; echo "$RAW" | jq -r '.statuses[]?.context'
+                echo "::notice::Kein Workers Build fuer diesen Commit — Probe uebersprungen."
+                echo "Vorhandene Check-Runs:"; echo "$RAW" | jq -r '.check_runs[]?.name'
                 exit 0
               fi
             else
-              STATE=$(echo "$CTX" | jq -r '.state')
-              echo "[$i] Cloudflare: $STATE"
+              # .status = queued|in_progress|completed · .conclusion = success|failure|…
+              STATE=$(echo "$CTX" | jq -r 'if .status != "completed" then "pending" else .conclusion end')
+              echo "[$i] Workers Builds: $STATE"
               if [ "$STATE" = "success" ]; then
                 echo "skip=false" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
-              if [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
-                echo "::error::Cloudflare-Build fehlgeschlagen — Probe sinnlos."
+              if [ "$STATE" = "failure" ] || [ "$STATE" = "cancelled" ] || [ "$STATE" = "timed_out" ]; then
+                echo "::error::Workers Build fehlgeschlagen ($STATE) — Probe sinnlos."
                 exit 1
               fi
             fi
             sleep 15
           done
-          echo "::error::Timeout beim Warten auf den Cloudflare-Build (10 min)."
+          echo "::error::Timeout beim Warten auf den Workers Build (10 min)."
           exit 1
 
       - name: Probe ausfuehren
@@ -104,8 +105,7 @@ jobs:
             TARGET="https://mcp.growthkit.tools"
           else
             # Annahme: Cloudflare ersetzt '/' durch '-'. Verifiziert an
-            # chore/harness-bootstrap -> chore-harness-bootstrap. Andere Sonderzeichen
-            # in Branch-Namen sind ungetestet — Branch-Namen schlicht halten.
+            # chore/harness-bootstrap -> chore-harness-bootstrap.
             SLUG="${BRANCH//\//-}"
             TARGET="https://${SLUG}-growthkit-mcp.purple-sun-a0b3.workers.dev"
           fi
