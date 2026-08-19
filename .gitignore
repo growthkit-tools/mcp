@@ -10,3 +10,6 @@ specs/
 .dev.vars.*
 .env
 .env.*
+
+# Node
+node_modules/
