@@ -49,17 +49,18 @@ melde den Widerspruch, statt ihn still zu übergehen.
 
 ## Werkzeuge
 
-⚠️ TODO — Scripts existieren noch nicht, werden im Harness-Bootstrap angelegt.
-
 ```
 Tool-Versionen:  package.json (exakte Versionen, kein Caret) + package-lock.json
                  Node: 24.16.0 · Deno: 2.8.0 (nicht in diesem Repo genutzt)
 Lokal starten:   npm run dev                     # wrangler dev → localhost:8787
 Tests:           npm test                        # vitest + @cloudflare/vitest-pool-workers
 Golden Master:   tests/golden/tools.json
-Golden updaten:  npm run golden:update           # NUR bei beabsichtigter Schema-Änderung
+Golden updaten:  ./scripts/probe.sh <base-url> --update-golden
+                 # NUR bei beabsichtigter Schema-Änderung
 Probe:           ./scripts/probe.sh <base-url>   # lokal oder Preview-Version-URL
-Preview-URL:     steht im Cloudflare-Build-Log des Branch-Pushes
+Preview-URL:     https://<branch-slug>-growthkit-mcp.purple-sun-a0b3.workers.dev
+                 (Branch-Slug = Branch-Name mit '/' → '-')
+CI:              .github/workflows/ci.yml — testet und probt NUR, deployt nie
 ```
 
 **Kein Docker im Code-Server verfügbar** und nichts hier braucht welches. Wenn du auf ein
@@ -84,10 +85,12 @@ Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
 4. **Keine DDL, keine SQL-Migrationen, kein `apply_migration`, kein `deploy_edge_function`.**
    Schema-Änderungen gehören ins `supabase`-Repo und brauchen einen Menschen. Wenn eine
    Änderung hier eine DB-Änderung erfordert: als Vorschlagsdatei ausgeben und stoppen.
-5. **`package.json` verändert das Build-Verhalten.** Seit 19.08. existiert eines im Root
-   (vorher bewusst keins). Ob Workers Builds dadurch einen Install-Step fährt, ist noch
-   nicht verifiziert. Änderungen an `package.json`, `package-lock.json` oder `wrangler.toml`
-   **nie direkt auf `main`** — immer erst als Preview-Version, Build-Log lesen.
+5. **`package.json` steuert den Install-Step im Workers Build.** Seit 19.08. existiert
+   eines im Root (vorher bewusst keins). **Verifiziert:** Workers Builds fährt
+   `npm clean-install` und `npx wrangler` greift danach auf die lokal gepinnte Version —
+   der Production-Deploy-Pfad ist damit gepinnt. `.nvmrc` steuert die Node-Version im Build.
+   Änderungen an `package.json`, `package-lock.json`, `.nvmrc` oder `wrangler.toml`
+   trotzdem **nie direkt auf `main`** — immer erst als Preview-Version, Build-Log lesen.
 6. **Kein blankes `npx` in Skripten oder CI.** `npx` löst `latest` auf und fragt bei
    fehlendem Paket interaktiv nach — in einer autonomen Session hängt das ohne Fehler.
    Werkzeuge kommen aus `devDependencies` über `npm run`. *(Beobachtet, 19.08.)*
@@ -117,12 +120,16 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 
 ### Compliance — `place_call`
 
-12. **`place_call` ist app-private** über `_meta.ui.visibility: ["app"]` (MCP-Apps /
-    SEP-1865). Es steht in `tools/list`, aber der Host verbirgt es vor dem Modell und
-    proxied nur `tools/call` aus dem Lead-Call-Card-Iframe. Das Modell kann es nie sehen
-    oder aufrufen — human-initiated only, damit UWG § 7 erfüllt.
+12. **Zwei Tools sind app-private:** `place_call` UND `save_call_outcome`, beide über
+    `_meta.ui.visibility: ["app"]` (MCP-Apps / SEP-1865). Sie stehen in `tools/list`, aber
+    der Host verbirgt sie vor dem Modell und proxied nur `tools/call` aus dem
+    Lead-Call-Card-Iframe. Das Modell kann sie nie sehen oder aufrufen — human-initiated
+    only, damit UWG § 7 erfüllt.
     **Dieses `_meta` ist compliance-tragend. Es zu verlieren bricht nichts sichtbar.**
     Nie entfernen, nie umbenennen, nie „aufräumen".
+    Gegenstück: **`show_callable_leads` MUSS modell-sichtbar bleiben** — es rendert die
+    Karte und trägt bewusst keine `visibility`, dafür `_meta.ui.resourceUri`. Nicht
+    „der Konsistenz halber" app-private machen. `probe.sh` prüft alle drei.
 13. `place_call` **nicht** aus `tools/list` weglassen. Der frühere Katalog-Hiding-Ansatz
     wurde verworfen: ein weggelassenes Tool kann vom Host als „unknown" abgelehnt werden,
     wenn das Iframe es aufruft.

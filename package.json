@@ -8,6 +8,7 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "deploy": "echo 'Verboten. Deploy = Push auf main.' && exit 1",
-    "probe": "./scripts/probe.sh"
+    "probe": "./scripts/probe.sh",
+    "golden:update": "./scripts/probe.sh"
   }
 }
