@@ -57,9 +57,16 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
     Preview-Versionen nutzen dieselben Bindings und Secrets wie Production. Die Rolle
     steckt im **Namen** des Tokens, nicht in einer Prüfung: im Workflow steht nur ein
     Secret-Name, beim Review sieht man sie nicht. Sie muss beim **Anlegen** entschieden
-    werden. `gk_view_` reicht, solange die CI-Pfade nur lesen — `probe.sh`,
-    `report-tools.sh` und `auth-paths.sh` tun das alle. `gk_team_` wäre die Obergrenze,
-    ein präfixloses Token nie.
+    werden. `gk_team_` wäre die Obergrenze, ein präfixloses Token nie.
+
+    Konkret statt „weniger": `gk_view_` sieht **30 von 68 Tools**. Davon sind **29
+    lesend — und eines nicht.** `setWorkingMemory` ist für `view` freigegeben, steht
+    nicht in `READ_ONLY_TOOLS` (wird also als Write gemetert) und ist als
+    `DESTRUCTIVE_TOOLS` klassifiziert; ein Handler-Guard fängt es nicht ab. Der
+    Working-Memory-Zustand ist session-lokal und bewusst für alle Rollen schreibbar —
+    aber **„`gk_view_` ist schreibfrei" ist damit falsch.** Für die CI-Pfade folgenlos
+    (`probe.sh`, `report-tools.sh`, `auth-paths.sh` rufen es nicht auf); als Zusage an
+    einen Token-Empfänger wäre es eine, die der Code nicht deckt.
 - Deploy: **automatisch bei Push** via Cloudflare Workers Builds (Git-Integration).
   Deploy-Command `npx wrangler deploy`, Version-Command `npx wrangler versions upload`.
   Es gibt **bewusst keine GitHub-Action** dafür — das ist kein Versäumnis, füge keine hinzu.
