@@ -11,16 +11,25 @@
 # Zwei Namen mit Absicht: lokal soll man mit dem EIGENEN Token laufen können,
 # ohne ihn "CI-Token" nennen zu müssen.
 #
-# Exit 0 = alle Checks grün. Exit 1 = mindestens einer rot. Exit 2 = Setup-Fehler.
 # Kein `set -e`: alle Checks sollen laufen, damit ein Durchlauf das volle Bild zeigt.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# ZWEI VERSCHIEDENE ROTE WEGE — beim ersten roten Lauf zuerst hier nachsehen:
+# DREI VERSCHIEDENE ROTE WEGE — beim ersten roten Lauf zuerst hier nachsehen.
 #
-#   exit 2  "GK_TOKEN nicht gesetzt"
+# Die Exit-Codes trennen nach ZUSTÄNDIGKEIT, nicht nach Symptom: 2 heißt "die
+# Umgebung des Aufrufers stimmt nicht", 3 heißt "das Ziel ist nicht benutzbar",
+# 1 heißt "beides stand, aber eine Assertion hat gehalten was sie soll".
+#
+#   exit 2  "GK_TOKEN nicht gesetzt" · jq/curl fehlt · kein Argument
 #           Das Secret fehlt, ist leer, oder heißt anders als in ci.yml. Ein
 #           fehlendes Secret expandiert in `env:` zum LEEREN STRING — es erreicht
-#           die Assertions nie und läuft in den Setup-Guard unten.
+#           die Assertions nie. Fix: Secret anlegen/umbenennen.
+#
+#   exit 3  "ZIEL NICHT BENUTZBAR" — server-card nicht erreichbar oder ohne
+#           transport.endpoint. Es gibt keine Fläche zum Prüfen; über das Token
+#           ist damit NICHTS gesagt. Häufigste Ursache: gegen eine Preview
+#           geprobt, deren Workers Build noch läuft. Fix: warten, nicht am Token
+#           suchen. Der Job hängt deshalb an `needs: probe`.
 #
 #   exit 1  Assertion A: "authentifizierte Liste ist keine echte Teilmenge"
 #           Ein Token IST angekommen, aber der Server hat ihn nicht akzeptiert
@@ -31,9 +40,14 @@
 #               n8n GENAU DAS GEGENTEIL vorschreibt)
 #             * es ist ein Admin-Token statt gk_view_
 #
-# Der Unterschied ist wichtig: "Secret fehlt" und "Token falsch" sehen im
-# GitHub-UI beide nur rot aus, aber sie haben verschiedene Ursachen und
-# verschiedene Fixes.
+# WARUM 3 UND NICHT NUR EINE KLARERE MELDUNG. Beim ersten Lauf (20.08.) lagen
+# "Secret fehlt" und "Preview noch nicht da" beide unter exit 2. Der Job war rot,
+# die Anleitung schickte zum Secret — das aber korrekt gesetzt war. Liegen zwei
+# Ursachen unter einer Signatur, ist die Signatur das Problem, nicht ihr Text.
+# Dasselbe Muster wie `data.path` im 401 des Workers: ein maschinenlesbarer
+# Diskriminator statt Meldungen zu parsen. Die 0/1/2-Konvention der anderen
+# Skripte wird hier bewusst um 3 erweitert; sie kennen den Fall nicht, weil sie
+# nicht an einer erst entstehenden Fläche hängen.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # KEIN TOKEN IM LOG. GitHub maskiert nur exakte Treffer registrierter Secrets;
@@ -71,11 +85,17 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # Endpoint aus der server-card lesen statt hardcoden: MCP_ENDPOINT ist laut
 # AGENTS.md §7 Single Source of Truth in index.js und fällt in die Card.
+# exit 3, NICHT 2: hier ist nicht die Umgebung des Aufrufers kaputt, sondern das
+# Ziel nicht benutzbar. Der erste Satz muss den Unterschied nennen — wer im
+# GitHub-UI nur "rot" sieht, soll nicht am Secret suchen.
 curl -sf -m 20 "$BASE/.well-known/mcp/server-card.json" -o "$TMP/card.json" \
-  || { echo "server-card.json nicht erreichbar unter $BASE — Abbruch" >&2; exit 2; }
+  || { echo "ZIEL NICHT BENUTZBAR (nicht das Token): server-card.json nicht erreichbar unter $BASE." >&2
+       echo "Meist läuft der Workers Build für diesen Commit noch. Über den Token ist damit nichts gesagt." >&2
+       exit 3; }
 EP=$(jq -r '.transport.endpoint' "$TMP/card.json")
 [ -n "$EP" ] && [ "$EP" != "null" ] \
-  || { echo "transport.endpoint fehlt in der server-card — Abbruch" >&2; exit 2; }
+  || { echo "ZIEL NICHT BENUTZBAR (nicht das Token): transport.endpoint fehlt in der server-card unter $BASE." >&2
+       exit 3; }
 
 # $1 = JSON-Body, $2 = Zieldatei, $3 = "auth" für authentifiziert (sonst ohne).
 post(){
