@@ -171,5 +171,99 @@ else
   fi
 fi
 
+# --- Repo-Hygiene · Exec-Bit, Ignore-Regeln, keine getrackten Secrets ---------
+# Zwei Fehlerklassen, die bisher nur auffielen, weil Chris beim Push-Stopp auf den
+# Commit-Stack gesehen hat: ein Testskript ohne Exec-Bit (#3) und ein ungeignortes
+# .wrangler/ (#4). Beide sind mechanisch prüfbar und gehören deshalb hierher und
+# nicht in einen Text, den jemand liest.
+#
+# WARUM NICHT "keine untracked Build-Artefakte". Das wäre in CI nicht prüfbar:
+# nach actions/checkout ist der Arbeitsbaum immer sauber, `git status --porcelain`
+# dort also immer leer und die Prüfung immer grün — §18a Fall (a) in genau der
+# Datei, die diese Fehlerklasse dokumentiert. Prüfbar ist nur, was eine Funktion
+# des COMMITS ist; der Arbeitsbaum-Zustand ist es nicht. Die Invariante, die es
+# ist: die Pfade, die ignoriert sein MÜSSEN, sind es auch. `git check-ignore`
+# wertet dafür die Regeln aus, auch für Pfade, die gar nicht existieren.
+#
+# Neue Abhängigkeit: git UND ein Repository. Fehlt eines davon, ist das ein
+# FEHLER und kein Grund zum Überspringen — dieselbe Regel wie beim fehlenden
+# index.js oben (§18a c).
+if ! command -v git >/dev/null 2>&1; then
+  ko "git nicht gefunden — Repo-Invarianten nicht prüfbar"
+elif ! git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  ko "kein git-Repository unter $REPO_ROOT — Repo-Invarianten nicht prüfbar"
+else
+  g(){ git -C "$REPO_ROOT" "$@"; }
+
+  # --- Exec-Bit -------------------------------------------------------------
+  # Modes aus dem INDEX, nicht vom Dateisystem: dieses Repo hat
+  # core.fileMode=false, ein `chmod +x` ist für git also unsichtbar. Ein neues
+  # Testskript landet dann als 100644, und der CI-Step `./tests/x.sh` scheitert
+  # mit "Permission denied" — so geschehen bei tests/report-tools.sh (#3) und
+  # davor schon bei scripts/probe.sh, das dafür einen eigenen Commit brauchte.
+  SH_N=$(g ls-files -s -- '*.sh' | wc -l | tr -d ' ')
+  if [ "$SH_N" -eq 0 ]; then
+    ko "Kein *.sh im Index gefunden — die Exec-Bit-Prüfung liefe leer-wahr durch"
+  else
+    # -F'\t': `ls-files -s` trennt den Pfad mit TAB ab. Ein Split auf Leerzeichen
+    # würde bei Pfaden mit Leerzeichen den falschen Namen melden.
+    NOEXEC=$(g ls-files -s -- '*.sh' \
+      | awk -F'\t' '{ split($1, m, " "); if (m[1] != "100755") print $2 " (" m[1] ")" }' \
+      | tr '\n' ' ')
+    if [ -z "$NOEXEC" ]; then
+      ok "Exec-Bit: alle $SH_N *.sh im Index sind 100755"
+    else
+      ko "Shell-Skript ohne Exec-Bit im Index: $NOEXEC — CI ruft sie direkt auf"
+    fi
+  fi
+
+  # --- Ignore-Regeln, BEIDE Richtungen --------------------------------------
+  # Die Negativkontrolle ist tragend, nicht Zierde: stünde ein `*` in
+  # .gitignore, wären alle Positivprüfungen grün und die Assertion prüfte nur
+  # noch, DASS etwas ignoriert wird — nicht, dass das Richtige ignoriert wird.
+  # (Invertiert-leer-wahr; verwandt mit §18a a, aber eine eigene Variante.)
+  #
+  # --no-index IST TRAGEND, nicht kosmetisch. Ohne das Flag wertet check-ignore
+  # den INDEX mit aus und meldet jede GETRACKTE Datei als "nicht ignoriert",
+  # unabhängig von den Regeln. Die Negativkontrolle wäre damit blind für genau
+  # den Fall, für den sie da ist: mit `*` in .gitignore blieb sie grün, weil
+  # index.js & Co. getrackt sind. Erst --no-index prüft die REGELN. (Beim
+  # Falsifizieren aufgefallen; durch Lesen nicht zu sehen.)
+  # Der Index-Fall ist damit nicht ungeprüft — er ist die Secret-Prüfung unten.
+  MUST_IGNORE=".wrangler/state node_modules/pkg/index.js .dev.vars .env key.pem specs/x.md scratchpad/x"
+  MUST_TRACK="index.js AGENTS.md wrangler.toml tests/source-invariants.sh"
+
+  NOT_IGNORED=""
+  for p in $MUST_IGNORE; do
+    g check-ignore -q --no-index "$p" || NOT_IGNORED="$NOT_IGNORED $p"
+  done
+  if [ -z "$NOT_IGNORED" ]; then
+    ok "Ignore-Regeln greifen für Build-Artefakte, Secrets und Specs"
+  else
+    ko "MUSS ignoriert sein, ist es aber nicht:$NOT_IGNORED — Repo ist öffentlich"
+  fi
+
+  WRONGLY_IGNORED=""
+  for p in $MUST_TRACK; do
+    g check-ignore -q --no-index "$p" && WRONGLY_IGNORED="$WRONGLY_IGNORED $p"
+  done
+  if [ -z "$WRONGLY_IGNORED" ]; then
+    ok "Negativkontrolle: Kerndateien sind nicht ignoriert"
+  else
+    ko "Zu breite Ignore-Regel — diese Dateien wären ausgeschlossen:$WRONGLY_IGNORED"
+  fi
+
+  # --- Keine getrackten Secrets ---------------------------------------------
+  # Die Ignore-Regeln oben sehen diesen Fall NICHT: `git add -f` geht an ihnen
+  # vorbei, und einmal getrackt bleibt eine Datei getrackt. Das ist der einzige
+  # Weg, auf dem ein Secret in dieses öffentliche Repo käme.
+  TRACKED_SECRETS=$(g ls-files | grep -E '\.pem$|(^|/)\.env|dev\.vars|\.key$' | tr '\n' ' ')
+  if [ -z "$TRACKED_SECRETS" ]; then
+    ok "Keine getrackte Datei sieht nach Secret aus"
+  else
+    ko "GETRACKTES SECRET im öffentlichen Repo: $TRACKED_SECRETS"
+  fi
+fi
+
 [ "$NESTED" -eq 1 ] || printf '\n\033[1m%s\033[0m\n' "Ergebnis: $PASS grün, $FAIL rot"
 [ "$FAIL" -eq 0 ] || exit 1
