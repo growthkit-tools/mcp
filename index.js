@@ -1300,7 +1300,10 @@ export default {
       const WWW_AUTH = { "WWW-Authenticate": `Bearer resource_metadata="${BASE_URL}/.well-known/oauth-protected-resource"` };
 
       if (requiresAuth && !token) {
-        return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required" } }, 401, WWW_AUTH);
+        // data.path benennt den Aufloesungsweg, an dem die Ablehnung entstand.
+        // "none" heisst: es lag gar kein verwertbarer Bearer an, es wurde kein
+        // Weg betreten. Nur hier. Siehe den Kommentar am zweiten Ablehnungspunkt.
+        return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required", data: { path: "none" } } }, 401, WWW_AUTH);
       }
 
       let userToken = null;
@@ -1311,23 +1314,61 @@ export default {
       // filtering. A public method with a missing/invalid token falls through
       // unauthenticated; a gated method with an invalid token is rejected.
       if (token && !isInitialize && !isInitialized) {
-        try {
-          const tokenLookup = await fetch(
-            `${env.SUPABASE_URL}/rest/v1/oauth_tokens?access_token=eq.${token}&select=*`,
-            { headers: sbHeaders(env) }
-          );
-          if (tokenLookup.ok) {
-            const tokenRows = await tokenLookup.json();
-            if (tokenRows.length && Number(tokenRows[0].expires_at) > Date.now()) {
-              userToken = tokenRows[0].user_token || null;
-              isDemo = tokenRows[0].is_demo === true;
-              demoClient = tokenRows[0].mcp_client || "other";
-              demoLang   = tokenRows[0].lang || "en";
+        // Zwei Aufloesungswege, unterschieden am Token-Praefix. Der Bearer ist
+        // entweder ein direkter gk_-API-Token (Tests, CI, Automatisierung) oder
+        // wie bisher ein OAuth-Access-Token. Die Unterscheidung faellt VOR jedem
+        // Backend-Aufruf, allein am Praefix.
+        const isApiToken = token.startsWith("gk_");
+        if (isApiToken) {
+          // resolve_user_token hasht selbst und prueft is_active — kein OAuth,
+          // kein Browser noetig. Das ist der ganze Zweck dieses Zweigs.
+          //
+          // Drei bewusste Nicht-Handlungen, die hier kommentiert stehen muessen,
+          // weil sie sonst wie vergessene Faelle aussehen:
+          //
+          // (a) Die Rolle kommt aus dem gk_-PRAEFIX (Ableitung unten), nicht aus
+          //     user_api_tokens.role. Die Spalte widerspricht dem Praefix
+          //     (gk_team_-Token mit role='admin'); beide Auth-Pfade muessen sich
+          //     identisch verhalten, also gilt hier wie dort das Praefix.
+          // (b) isDemo bleibt IMMER false. user_api_tokens hat kein is_demo — ein
+          //     gk_-Bearer kann nie eine Demo-Session sein. Demo laeuft
+          //     ausschliesslich ueber OAuth. Absicht, kein vergessener Fall.
+          // (c) last_used_at wird NICHT aktualisiert: resolve_user_token schreibt
+          //     nicht (das macht nur use_api_token). Der Read-Pfad bleibt bewusst
+          //     schreibfrei; ueber diesen Weg genutzte Tokens sehen in der Tabelle
+          //     unbenutzt aus.
+          //
+          // try/catch wie im OAuth-Zweig: callRpc wirft bei Netz- oder
+          // Config-Fehlern und resolveUserId faengt nichts. Ohne das wird aus
+          // einer 401 eine 500.
+          try {
+            const uid = await resolveUserId(token);
+            if (uid) userToken = token;
+          } catch (e) { console.error("API token lookup error:", e); }
+        } else {
+          try {
+            const tokenLookup = await fetch(
+              `${env.SUPABASE_URL}/rest/v1/oauth_tokens?access_token=eq.${token}&select=*`,
+              { headers: sbHeaders(env) }
+            );
+            if (tokenLookup.ok) {
+              const tokenRows = await tokenLookup.json();
+              if (tokenRows.length && Number(tokenRows[0].expires_at) > Date.now()) {
+                userToken = tokenRows[0].user_token || null;
+                isDemo = tokenRows[0].is_demo === true;
+                demoClient = tokenRows[0].mcp_client || "other";
+                demoLang   = tokenRows[0].lang || "en";
+              }
             }
-          }
-        } catch (e) { console.error("Token lookup error:", e); }
+          } catch (e) { console.error("Token lookup error:", e); }
+        }
         if (!userToken && requiresAuth) {
-          return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Invalid or expired token" } }, 401, WWW_AUTH);
+          // Beide Wege antworten mit derselben Meldung, und das bleibt so: sie
+          // darf nicht verraten, ob ein Token unbekannt oder deaktiviert ist.
+          // Damit ist die Meldung allein aber kein Beleg, WELCHER Weg lief —
+          // deshalb der maschinenlesbare Diskriminator in data.path. Er sagt nur
+          // das, nichts ueber das Token. tests/auth-paths.sh haengt daran.
+          return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Invalid or expired token", data: { path: isApiToken ? "api_token" : "oauth" } } }, 401, WWW_AUTH);
         }
       }
 
