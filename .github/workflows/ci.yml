@@ -82,8 +82,16 @@ jobs:
             CTX=$(echo "$RAW" | jq -c '[.check_runs[]? | select(.name == "Workers Builds: growthkit-mcp")] | .[0] // empty')
 
             if [ -z "$CTX" ]; then
-              # Kein Check-Run = kein Build ausgeloest. Normalfall bei Commits, die
-              # nur Build-watch-excluded Pfade anfassen (.github/**, *.md, specs/**).
+              # Kein Check-Run = kein Build ausgeloest. Normalfall bei Commits, die nur
+              # Build-watch-excluded Pfade anfassen: *.md, specs/**, .claude/**,
+              # .github/**, tests/**, scripts/**. Autoritativ ist die Liste im
+              # Cloudflare-Dashboard — das hier ist eine Kopie und kann driften.
+              #
+              # ACHTUNG (verifiziert 20.08.): Die Excludes greifen erst auf einem Branch
+              # MIT Build-Historie. Der erste Push eines NEUEN Branches baut immer, auch
+              # wenn er nur exkludierte Pfade anfasst — ohne vorherigen Build gibt es
+              # keine Diff-Basis. "Kein Build" ist also nichts, was man vom ersten Push
+              # eines Branches erwarten darf.
               if [ "$i" -ge 8 ]; then
                 echo "skip=true" >> "$GITHUB_OUTPUT"
                 echo "::notice::Kein Workers Build fuer diesen Commit — Probe uebersprungen."
