@@ -2,7 +2,7 @@
 # GrowthKit MCP — Report-Tools-Test
 #
 # Prüft getSeoReport / getAeoReport gegen eine laufende Instanz.
-# Deckt A5 aus specs/mcp-report-tools.md ab.
+# Deckt A5 aus der lokalen, bewusst nicht getrackten Spec mcp-report-tools.md ab.
 #
 #   ./tests/report-tools.sh <base-url>
 #
