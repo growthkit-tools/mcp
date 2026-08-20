@@ -88,12 +88,21 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
   - Ein **Folge-Push** auf einem Branch mit Build-Historie baut **ebenfalls** —
     `a198ebd` fasste nur `AGENTS.md` an und hat gebaut, obwohl `*.md` im Dashboard als
     Exclude gesetzt ist (PR #10, Step-Conclusions geprüft: kein Step `skipped`).
+  - Ein weiterer Folge-Push, andere exkludierte Pfade: `tests/**` und `.github/**`
+    (PR #12) — **ebenfalls gebaut**.
 
-  ⚠️ **Warum die Excludes auf Feature-Branches nicht greifen, ist OFFEN.** Nicht raten,
-  und aus den drei Punkten keine Regel extrapolieren: **„kein Build" ist auf einem
-  Feature-Branch derzeit nicht vorhersagbar.** Die frühere Fassung dieser Zeile
-  behauptete, die Excludes griffen „ab einem Branch mit Build-Historie" — das war aus
-  den `main`-Merge-Commits extrapoliert und ist durch `a198ebd` widerlegt.
+  **Vier gleichgerichtete Beobachtungen sind kein Einzelfall mehr.** Das Muster, das
+  sich daraus abzeichnet: **auf Feature-Branches greifen die Excludes offenbar generell
+  nicht** — unabhängig von Build-Historie und unabhängig davon, welcher exkludierte Pfad
+  angefasst wird. Nur Merge-Commits auf `main` verhalten sich anders.
+
+  ⚠️ **Das Muster erklärt nichts.** Warum `main` und Feature-Branches sich unterscheiden,
+  ist weiterhin **OFFEN** — die Exclude-Liste ist es nicht, sie wurde am 20.08. im
+  Dashboard geprüft und steht vollständig. Ein Muster ist kein Mechanismus: es sagt, was
+  man erwarten kann, nicht warum. Praktisch heißt das unverändert: **auf einem
+  Feature-Branch mit „kein Build" zu rechnen, ist unbegründet.** Die frühere Fassung
+  dieser Zeile behauptete, die Excludes griffen „ab einem Branch mit Build-Historie" —
+  das war aus den `main`-Merge-Commits extrapoliert und ist widerlegt.
   *(Beobachtet, 20.08.)*
 
 - **Die Build-Konfiguration lebt ausschließlich im Cloudflare-Dashboard** — Include- und
@@ -271,7 +280,14 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
       Belege für (c): ein fehlendes `index.js` gab in `probe.sh` nur eine Notiz aus und
       blieb grün; ein umbenanntes `const PROTOCOL_VERSION` lieferte `""` und war damit
       gegen jeden Vergleich mit dem ext-apps-Wert grün. Alle drei fallen beim Lesen
-      nicht auf, nur beim Falsifizieren. *(Beobachtet, 20.08.)*
+      nicht auf, nur beim Falsifizieren.
+      **Und beim Falsifizieren selbst: erst prüfen, ob die Injektion gelandet ist.**
+      Eine Falsifikation, die nichts injiziert hat, ist von einer Assertion, die nichts
+      fängt, nicht zu unterscheiden — beide bleiben grün. Beleg: ein `sed`-Muster mit
+      sechs Leerzeichen dort, wo eines steht, änderte nichts; der Lauf blieb grün und
+      sah aus wie ein Test, der den Fehler nicht fängt. Also nach dem Injizieren die
+      geänderte Zeile ausgeben, nicht auf den Ersetzungsbefehl vertrauen.
+      *(Beobachtet, 20.08.)*
 19. **Tool-Schema-Änderungen nur mit Golden-Master-Update im selben Commit.** Wenn das
     Golden abweicht und du die Änderung nicht bewusst gemacht hast, ist **die Änderung der
     Bug** — nicht das Golden-File. Golden nie „reparieren", damit CI grün wird.
@@ -341,6 +357,24 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   ändert am Verhalten des Workers nichts. (`is_demo` sticht jedes Präfix und erzwingt
   `demo` — aber nur auf dem OAuth-Pfad, der `gk_`-Pfad kennt kein `is_demo`.)
   *(Beobachtet, 20.08.)*
+
+- **`probe.sh` zählt einen delegierten Aufruf als EINEN Eintrag.** Sektion H ruft
+  `tests/source-invariants.sh --nested` auf; dessen Assertionszeilen werden gedruckt,
+  aber im Kindprozess gezählt — der Elternzähler sieht sie nie. Die Summenzeile von
+  `probe.sh` ist deshalb **keine Assertion-Anzahl**: sie blieb bei 30, als
+  `source-invariants.sh` von 2 auf 6 Assertions wuchs. Wer sie als Abdeckungsmaß liest,
+  unterschätzt sie. Was zählt und geprüft ist: der **Exit-Code propagiert** — Kind
+  `exit 1` → `probe.sh` `exit 1`, über `if bash … --nested; then ok; else ko; fi`.
+  *(Beobachtet, 20.08.)*
+
+- **Reihenfolgen-Kopplung ist nicht Ergebnis-Kopplung.** In GitHub Actions koppelt
+  `needs:` die **Reihenfolge**, `if: always()` entkoppelt das **Ergebnis**. Wer beides
+  für dasselbe hält, verzichtet auf `needs:`, um „unabhängig" zu bleiben — und
+  dupliziert dann Logik, ohne Unabhängigkeit zu gewinnen. Beleg: der `authed-smoke`-Job
+  lief ohne `needs:` sofort los und scheiterte **84 s bevor** der Workers Build fertig
+  war; das war kein Flake, sondern das deterministische Ergebnis jedes Laufs (Build
+  ~90 s, Job-Start sofort). Mit `needs: probe` + `always()` wartet er auf den Build und
+  läuft trotzdem, wenn `probe` rot ist. *(Beobachtet, 20.08.)*
 
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
 
