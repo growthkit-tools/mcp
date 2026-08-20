@@ -1,4 +1,8 @@
-.claude/
+# .claude/ bleibt ignoriert — AUSSER settings.json. Die ist die geteilte,
+# reproduzierbare Konfiguration; settings.local.json ist persoenlich und waechst
+# durch weggeklickte Permission-Prompts, gehoert also nicht ins Repo.
+.claude/*
+!.claude/settings.json
 gk-mcp-key.pem
 *.pem
 mcp-publisher
