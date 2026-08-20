@@ -22,18 +22,51 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
 - Backend: Supabase-Projekt (EU Frankfurt) über Edge Functions,
   Custom Domain `api.growthkit.tools` proxied `/functions/v1/*`.
   Project-Ref steht in `wrangler.toml` / den Worker-Secrets, nicht hier.
-- Auth: Der Bearer ist ein **OAuth-Access-Token, kein `gk_`-Token.** Er wird gegen
-  `oauth_tokens.access_token` aufgelöst (`index.js` ~1314, plus Ablaufprüfung); das
-  `gk_`-Token liegt dort als `user_token` und wird von da an die Edge Functions
-  weitergereicht. Alles danach — Rollenableitung, Metering, Tool-Dispatch — hängt nur
-  noch an `user_token`. **Ein rohes `gk_`-Token als Bearer wird abgelehnt**
-  (`401 Invalid or expired token`): es steht nicht in `oauth_tokens.access_token`.
-  Folge: weder ein Agent noch CI kann authentifiziert aufrufen, weil OAuth einen
-  Browser-Redirect braucht. Ein zweiter, browserfreier Auth-Pfad ist als Spec
-  ausgearbeitet — sie liegt lokal, `specs/` ist bewusst nicht getrackt.
-  *(Beobachtet, 20.08.)*
+- Auth: **Zwei Auflösungswege, unterschieden allein am Token-Präfix** (`index.js` ~1321).
+  Die Entscheidung fällt vor jedem Backend-Aufruf.
+  - Bearer beginnt mit `gk_` → **direkter API-Token-Pfad**: `resolve_user_token` gegen
+    `user_api_tokens`; die RPC hasht selbst und prüft `is_active`. Kein OAuth, kein
+    Browser — das ist der Pfad für Tests, CI und Automatisierung. Zwei bewusste
+    Nicht-Handlungen: `last_used_at` bleibt **ungeschrieben** (`resolve_user_token`
+    schreibt nicht, das tut nur `use_api_token`), Tokens sehen über diesen Weg also
+    unbenutzt aus; und `isDemo` ist hier **immer `false`** — `user_api_tokens` hat kein
+    `is_demo`, Demo-Sessions laufen ausschließlich über OAuth.
+  - Alles andere → **OAuth-Pfad** wie bisher: gegen `oauth_tokens.access_token` mit
+    Ablaufprüfung; das `gk_`-Token liegt dort als `user_token`.
+
+  Beide Wege enden bei `userToken`; alles danach — Rollenableitung, Metering,
+  Tool-Dispatch — hängt nur noch daran. Beide antworten bei Misserfolg mit **derselben**
+  Meldung (`Invalid or expired token`) — Absicht, sie darf nicht verraten, ob ein Token
+  unbekannt oder deaktiviert ist. Damit ist die Meldung allein kein Beleg, welcher Zweig
+  lief; dafür gibt es den maschinenlesbaren Diskriminator `data.path`
+  (`api_token` | `oauth`), an dem `tests/auth-paths.sh` hängt.
+  *(Live verifiziert, 20.08.)*
   — Nicht zu verwechseln mit dem **Query-Scoping** auf `to_token_hash`, siehe §14.
     Das ist eine andere Aussage über eine andere Ebene und weiterhin gültig.
+
+- **Die Rolle kommt aus dem Präfix, nicht aus der Datenbank** (`index.js` ~1376):
+  `gk_team_` → `team`, `gk_view_` → `view`, **alles andere → `admin`**. Das Präfix kann
+  nur **herabstufen** — ein präfixloses `gk_`-Token bekommt die höchste Rolle.
+  Live belegt an einem Workspace: **68 Tools für `admin`, 63 für `gk_team_`** (die fünf
+  Differenzen sind die admin-only-destruktiven). Beide Tokens lösen auf **denselben
+  `user_id`** auf — **die Rolle unterscheidet sich, der Datenraum nicht.** Wer die
+  Rollenfilterung für eine Mandantengrenze hält, liegt falsch.
+  *(Live verifiziert, 20.08.)*
+  - **Betriebsregel: ein CI-/Testtoken wird bewusst als `gk_view_` angelegt.** Sonst
+    läuft der Runner mit `admin` — schreibend, auf echte Workspace-Daten, denn
+    Preview-Versionen nutzen dieselben Bindings und Secrets wie Production. Die Rolle
+    steckt im **Namen** des Tokens, nicht in einer Prüfung: im Workflow steht nur ein
+    Secret-Name, beim Review sieht man sie nicht. Sie muss beim **Anlegen** entschieden
+    werden. `gk_team_` wäre die Obergrenze, ein präfixloses Token nie.
+
+    Konkret statt „weniger": `gk_view_` sieht **30 von 68 Tools**. Davon sind **29
+    lesend — und eines nicht.** `setWorkingMemory` ist für `view` freigegeben, steht
+    nicht in `READ_ONLY_TOOLS` (wird also als Write gemetert) und ist als
+    `DESTRUCTIVE_TOOLS` klassifiziert; ein Handler-Guard fängt es nicht ab. Der
+    Working-Memory-Zustand ist session-lokal und bewusst für alle Rollen schreibbar —
+    aber **„`gk_view_` ist schreibfrei" ist damit falsch.** Für die CI-Pfade folgenlos
+    (`probe.sh`, `report-tools.sh`, `auth-paths.sh` rufen es nicht auf); als Zusage an
+    einen Token-Empfänger wäre es eine, die der Code nicht deckt.
 - Deploy: **automatisch bei Push** via Cloudflare Workers Builds (Git-Integration).
   Deploy-Command `npx wrangler deploy`, Version-Command `npx wrangler versions upload`.
   Es gibt **bewusst keine GitHub-Action** dafür — das ist kein Versäumnis, füge keine hinzu.
@@ -79,6 +112,12 @@ Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
                  # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
                  # in Sektion H mit --nested hierher. Einzige Kopie von
                  # EXP_UI_PROTOCOL im Repo — nie eine zweite anlegen.
+Auth-Pfade:      ./tests/auth-paths.sh <base-url>
+                 # Prüft, WELCHER Auflösungsweg betreten wurde (data.path) und dass
+                 # die öffentlichen Pfade offen bleiben. Secret-frei, weil nur
+                 # Negativfälle: der Positivfall braucht ein echtes gk_-Token und
+                 # bleibt manuell. Läuft im probe-Job.
+Report-Tools:    ./tests/report-tools.sh <base-url>   # läuft im probe-Job
 Golden Master:   tests/golden/tools.json
 Golden updaten:  ./scripts/probe.sh <base-url> --update-golden
                  # NUR bei beabsichtigter Schema-Änderung
@@ -274,13 +313,12 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   **falsche** Description fängt der Golden Master nie. Dafür braucht es eine eigene
   Assertion (siehe `tests/report-tools.sh`). *(Beobachtet, 20.08.)*
 
-- **Rollen-Doppeldeutigkeit.** Der Worker leitet `userRole` **ausschließlich aus dem
-  `gk_`-Token-Präfix** ab (`index.js` ~1335): `gk_team_` → `team`, `gk_view_` → `view`,
-  **alles andere → `admin`**. `user_api_tokens.role` wird nirgends gelesen. Beide können
-  sich also widersprechen, ohne dass es auffällt — Chris' Token ist `gk_team_` bei
-  `role='admin'` und wird vom Worker als `team` behandelt. Auf die Richtung des Defaults
-  achten: das Präfix kann nur **herabstufen**, ein Token ohne erkanntes Präfix bekommt
-  die höchste Rolle. (`is_demo` sticht jedes Präfix und erzwingt `demo`.)
+- **Rollen-Doppeldeutigkeit.** `user_api_tokens` hat eine `role`-Spalte, und **der Worker
+  liest sie nirgends** — die Rolle fällt allein aus dem Token-Präfix (siehe „Wissen").
+  Beide können sich also widersprechen, ohne dass es auffällt: Chris' Token ist
+  `gk_team_` bei `role='admin'` und wird als `team` behandelt. Wer die Spalte ändert,
+  ändert am Verhalten des Workers nichts. (`is_demo` sticht jedes Präfix und erzwingt
+  `demo` — aber nur auf dem OAuth-Pfad, der `gk_`-Pfad kennt kein `is_demo`.)
   *(Beobachtet, 20.08.)*
 
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
