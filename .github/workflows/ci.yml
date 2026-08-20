@@ -29,6 +29,7 @@ jobs:
           bash -n tests/source-invariants.sh
           bash -n tests/report-tools.sh
           bash -n tests/auth-paths.sh
+          bash -n tests/authed-smoke.sh
 
       # Quellreine Invarianten (AGENTS.md §11): reine Funktionen des Checkouts —
       # kein HTTP, keine laufende Instanz, kein Workers Build. Deshalb HIER und
@@ -186,3 +187,60 @@ jobs:
           echo "Auth-Pfade gegen: $TARGET"
           chmod +x tests/auth-paths.sh
           ./tests/auth-paths.sh "$TARGET"
+
+  # ---------------------------------------------------------------------------
+  # Der einzige Job, der ein Secret braucht. Deshalb ein EIGENER Job und kein
+  # Step im probe-Job: bei `pull_request` aus einem Fork reicht GitHub keine
+  # Secrets durch. Als Step im probe-Job wuerde jeder Fork-PR den probe-Job rot
+  # faerben; als eigener Job ist das Nicht-Laufen ein eigener, sichtbarer Zustand.
+  #
+  # BEWUSST OHNE `needs: probe`. Technisch ginge es (Job-Outputs statt der
+  # duplizierten TARGET-Herleitung unten), aber dann haengt dieser Job am Ergebnis
+  # des probe-Jobs — und ein roter oder uebersprungener Probe wuerde die
+  # authentifizierte Abdeckung mitreissen. Dieselbe Ueberlegung wie beim always()
+  # am Report-Test: faellt das eine aus, ist das andere gerade dann interessant.
+  # Die TARGET-Duplikation ist der bewusst gezahlte Preis dafuer — wer sie spaeter
+  # mit `needs:` "optimiert", koppelt die beiden Jobs wieder zusammen.
+  authed-smoke:
+    name: Authed Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Target-URL bestimmen
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -uo pipefail
+          if [ "$BRANCH" = "main" ]; then
+            TARGET="https://mcp.growthkit.tools"
+          else
+            SLUG="${BRANCH//\//-}"
+            TARGET="https://${SLUG}-growthkit-mcp.purple-sun-a0b3.workers.dev"
+          fi
+          echo "Target: $TARGET"
+          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+
+      # Das Fork-Gate steht auf STEP-Ebene, NICHT am Job. Stuende es am Job, wuerde
+      # der ganze Job uebersprungen — einschliesslich des warnenden Steps darunter,
+      # und die fehlende Abdeckung waere wieder still. Genau das soll die Warnung
+      # verhindern.
+      #
+      # KEINE Bedingung auf "Secret vorhanden": ein fehlendes Secret expandiert zum
+      # leeren String und laeuft im Skript in den Setup-Guard (exit 2). Ein
+      # falsches Token laeuft in die Kollisions-Assertion (exit 1). Beide Wege sind
+      # rot, aber unterscheidbar — siehe Kopf von tests/authed-smoke.sh.
+      - name: Authed Smoke
+        if: github.event.pull_request.head.repo.fork != true
+        env:
+          GK_TOKEN: ${{ secrets.GK_CI_TOKEN }}
+        run: |
+          set -uo pipefail
+          echo "Authed Smoke gegen: $TARGET"
+          chmod +x tests/authed-smoke.sh
+          ./tests/authed-smoke.sh "$TARGET"
+
+      - name: Hinweis — authentifizierte Abdeckung uebersprungen
+        if: github.event.pull_request.head.repo.fork == true
+        run: |
+          echo "::warning::Fork-PR — GitHub reicht keine Secrets durch. Der authentifizierte Smoke-Test ist NICHT gelaufen: Rollenfilterung, gk_-Auth-Pfad und der Beispielwert-Test aus #4 sind in diesem Lauf ungeprueft."
