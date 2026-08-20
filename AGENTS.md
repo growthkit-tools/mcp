@@ -22,7 +22,18 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
 - Backend: Supabase-Projekt (EU Frankfurt) über Edge Functions,
   Custom Domain `api.growthkit.tools` proxied `/functions/v1/*`.
   Project-Ref steht in `wrangler.toml` / den Worker-Secrets, nicht hier.
-- Auth: Bearer-Token, **token-hash-scoped**, nicht user-id-scoped.
+- Auth: Der Bearer ist ein **OAuth-Access-Token, kein `gk_`-Token.** Er wird gegen
+  `oauth_tokens.access_token` aufgelöst (`index.js` ~1314, plus Ablaufprüfung); das
+  `gk_`-Token liegt dort als `user_token` und wird von da an die Edge Functions
+  weitergereicht. Alles danach — Rollenableitung, Metering, Tool-Dispatch — hängt nur
+  noch an `user_token`. **Ein rohes `gk_`-Token als Bearer wird abgelehnt**
+  (`401 Invalid or expired token`): es steht nicht in `oauth_tokens.access_token`.
+  Folge: weder ein Agent noch CI kann authentifiziert aufrufen, weil OAuth einen
+  Browser-Redirect braucht. Ein zweiter, browserfreier Auth-Pfad ist als Spec
+  ausgearbeitet — sie liegt lokal, `specs/` ist bewusst nicht getrackt.
+  *(Beobachtet, 20.08.)*
+  — Nicht zu verwechseln mit dem **Query-Scoping** auf `to_token_hash`, siehe §14.
+    Das ist eine andere Aussage über eine andere Ebene und weiterhin gültig.
 - Deploy: **automatisch bei Push** via Cloudflare Workers Builds (Git-Integration).
   Deploy-Command `npx wrangler deploy`, Version-Command `npx wrangler versions upload`.
   Es gibt **bewusst keine GitHub-Action** dafür — das ist kein Versäumnis, füge keine hinzu.
@@ -57,6 +68,16 @@ Tests:           npm test                        # vitest + @cloudflare/vitest-p
 Golden Master:   tests/golden/tools.json
 Golden updaten:  ./scripts/probe.sh <base-url> --update-golden
                  # NUR bei beabsichtigter Schema-Änderung
+Golden LOKAL:    npm run dev                     # Terminal 1
+                 ./scripts/probe.sh http://localhost:8787 --update-golden
+                 # Bevorzugter Weg. Code und Golden landen atomar in EINEM Commit —
+                 # kein amend, kein force-push, und keine Race zwischen zwei schnell
+                 # aufeinanderfolgenden Pushes (die branch-basierte Alias-URL zeigt
+                 # auf die neuere Version, während der Check-Run noch zum älteren
+                 # Commit gehört).
+                 # Läuft OHNE .dev.vars: SUPABASE_URL steht in [vars], KV wird lokal
+                 # simuliert, und A–G fassen nur unauthentifizierte Pfade an.
+                 # A–G gehen gegen die URL, H liest index.js vom Dateisystem.
 Probe:           ./scripts/probe.sh <base-url>   # lokal oder Preview-Version-URL
 Preview-URL:     https://<branch-slug>-growthkit-mcp.purple-sun-a0b3.workers.dev
                  (Branch-Slug = Branch-Name mit '/' → '-')
@@ -160,6 +181,14 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Zwei
+      beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen: (a) eine
+      Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede Iteration
+      über eine Liste braucht daher zusätzlich eine Prüfung, dass die Liste nicht leer
+      ist; (b) in `jq` rebindet `|` das `.`, sodass `$d | contains(.)` zu
+      `$d contains $d` wird und immer wahr ist — Werte vor dem Vergleich mit `. as $e`
+      binden. Beides fällt beim Lesen nicht auf, nur beim Falsifizieren.
+      *(Beobachtet, 20.08.)*
 19. **Tool-Schema-Änderungen nur mit Golden-Master-Update im selben Commit.** Wenn das
     Golden abweicht und du die Änderung nicht bewusst gemacht hast, ist **die Änderung der
     Bug** — nicht das Golden-File. Golden nie „reparieren", damit CI grün wird.
@@ -192,6 +221,33 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   Shared Helper betreffen, die andere Tools nutzen. Vor jeder Änderung: Aufrufer greppen.
 - Der Stateless-HTTP-RC (`server/discover`, kein `initialize`-Handshake) ist **additiv**
   geplant, kein Rewrite. Bestehende Handshake-Pfade bleiben funktionsfähig.
+
+- **Zwei Repräsentationen derselben Domain** in `supabase`,
+  `functions/weekly-seo-report/index.ts`: ein **Slug** (Bindestriche) und ein **Label**
+  (Punkte). Sie bedienen verschiedene Kontexte und sind leicht zu verwechseln. Für die
+  `domain`-Argumente von `getSeoReport`/`getAeoReport` gilt der **Slug**. Ein falscher
+  Wert liefert `{}` — still, ohne Fehler, und nicht vom Fall „Workspace hat noch keine
+  Reports" unterscheidbar. So entstand der Description-Bug in #4. Welche Funktion was
+  liefert, steht im Code drüben — hier nicht nacherzählt, weil eine Beschreibung fremden
+  Codes still veraltet. *(Beobachtet, 20.08.)*
+
+- **Descriptions stehen bewusst NICHT im Golden Master.** Er erfasst `name`, die *Keys*
+  von `inputSchema.properties`, `required` und `_meta` — laut `probe.sh`, „sonst wird
+  jede Formulierungsverbesserung ein roter Build". Zwei Folgen: nach einer reinen
+  Description-Änderung ist ein „Golden-Update" ein **No-op**, und §19 greift dort nicht
+  — wer eines verlangt, hat den Scope des Golden missverstanden. Umgekehrt gilt: eine
+  **falsche** Description fängt der Golden Master nie. Dafür braucht es eine eigene
+  Assertion (siehe `tests/report-tools.sh`). *(Beobachtet, 20.08.)*
+
+- **Rollen-Doppeldeutigkeit.** Der Worker leitet `userRole` **ausschließlich aus dem
+  `gk_`-Token-Präfix** ab (`index.js` ~1335): `gk_team_` → `team`, `gk_view_` → `view`,
+  **alles andere → `admin`**. `user_api_tokens.role` wird nirgends gelesen. Beide können
+  sich also widersprechen, ohne dass es auffällt — Chris' Token ist `gk_team_` bei
+  `role='admin'` und wird vom Worker als `team` behandelt. Auf die Richtung des Defaults
+  achten: das Präfix kann nur **herabstufen**, ein Token ohne erkanntes Präfix bekommt
+  die höchste Rolle. (`is_demo` sticht jedes Präfix und erzwingt `demo`.)
+  *(Beobachtet, 20.08.)*
+
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
 
 ---
