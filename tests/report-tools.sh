@@ -96,6 +96,47 @@ for t in $REPORT_TOOLS; do
     '.result.tools[] | select(.name==$n) | .inputSchema.properties.domain.type // "FEHLT"' "$TMP/list.json")
   eq "$t: domain ist string" "$DTYPE" "string"
 
+  # Regression auf den Slug-Bug: die Description nannte 'growthkit.tools' (mit
+  # Punkt) als Beispiel. domainSlug() im weekly-seo-report ersetzt [^a-z0-9]+
+  # durch '-', der echte Wert ist 'growthkit-tools'. Ein Aufruf mit dem
+  # dokumentierten Wert liefert {} — still, ohne Fehler, und nicht vom Fall
+  # "Workspace hat noch keine Reports" unterscheidbar.
+  #
+  # Geprueft wird das maschinenlesbare `examples`, NICHT der Fliesstext: eine
+  # Regex ueber die Prosa wuerde an Gegenbeispielen ("… not 'x.y'") scheitern und
+  # bei jeder Umformulierung brechen. Die Description faellt im Worker aus
+  # derselben Liste wie `examples`, deshalb genuegt das strukturierte Feld.
+  N_EX=$(jq -r --arg n "$t" \
+    '[.result.tools[] | select(.name==$n) | .inputSchema.properties.domain.examples[]?] | length' "$TMP/list.json")
+  if [ "$N_EX" -ge 1 ]; then
+    ok "$t: domain hat $N_EX Beispiel(e)"
+  else
+    ko "$t: domain hat kein examples — Regression auf den Slug-Bug nicht pruefbar"
+  fi
+
+  BAD=$(jq -r --arg n "$t" \
+    '[.result.tools[] | select(.name==$n) | .inputSchema.properties.domain.examples[]?
+      | select(test("^[a-z0-9]+(-[a-z0-9]+)*$") | not)] | join(", ")' "$TMP/list.json")
+  if [ -z "$BAD" ]; then
+    ok "$t: alle domain-Beispiele sind Slugs"
+  else
+    ko "$t: domain-Beispiel ist kein Slug: $BAD — liefert {} ohne Fehler"
+  fi
+
+  # Und die Prosa muss die strukturierten Werte auch nennen, sonst liest ein
+  # Mensch weiter den falschen Wert, waehrend `examples` still korrekt ist.
+  # `. as $e` ist hier tragend: in `$d | contains(.)` wuerde die Pipe das `.` auf
+  # $d rebinden — die Pruefung waere `$d contains $d`, also immer wahr, und die
+  # Assertion still leer-wahr. (Genau so gebaut, beim Falsifizieren aufgefallen.)
+  MISSING=$(jq -r --arg n "$t" \
+    '.result.tools[] | select(.name==$n) | .inputSchema.properties.domain
+     | .description as $d | [.examples[]? | . as $e | select($d | contains($e) | not)] | join(", ")' "$TMP/list.json")
+  if [ -z "$MISSING" ]; then
+    ok "$t: Description nennt alle domain-Beispiele"
+  else
+    ko "$t: Description nennt diese Beispiele nicht: $MISSING"
+  fi
+
   # user_token kommt aus dem MCP-Bearer und wird serverseitig in den Body gesetzt.
   # Er darf im Schema nirgends auftauchen — auch nicht verschachtelt, daher
   # tostring über das ganze Schema statt nur ein keys-Vergleich.
