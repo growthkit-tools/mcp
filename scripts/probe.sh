@@ -38,7 +38,6 @@ GOLDEN="$REPO_ROOT/tests/golden/tools.json"
 EXP_CANONICAL="https://mcp.growthkit.tools"
 EXP_SERVER_NAME="tools.growthkit/revenue-intelligence"
 EXP_CARD_TOOLS="dynamic"
-EXP_UI_PROTOCOL="2026-01-26"      # ext-apps LATEST_PROTOCOL_VERSION, NICHT PROTOCOL_VERSION
 APP_PRIVATE_TOOLS="place_call save_call_outcome"
 MIN_DESC_LEN=20
 
@@ -226,6 +225,10 @@ fi
 # =============================================================================
 sec "H · Source-Invarianten (nur lokal/CI, kein HTTP)"
 # =============================================================================
+# Hier stehen nur noch die GEMISCHTEN Assertions: sie vergleichen den Checkout
+# gegen die servierte Fläche und brauchen beide Seiten aus demselben Commit.
+# Läuft der Probe gegen eine Fläche, die aus einem anderen Commit stammt, sind sie
+# bedeutungslos — nicht bloß ungenau.
 if [ -f "$REPO_ROOT/index.js" ]; then
 
   SRC_VER=$(sed   -n 's/^const SERVER_VERSION *= *"\([^"]*\)".*/\1/p'   "$REPO_ROOT/index.js" | head -1)
@@ -234,32 +237,19 @@ if [ -f "$REPO_ROOT/index.js" ]; then
   eq "SERVER_VERSION (Source) == Card"   "$SRC_VER"   "$CARD_VER"
   eq "PROTOCOL_VERSION (Source) == Card" "$SRC_PROTO" "$CARD_PROTO"
 
-  if [ "$SRC_PROTO" = "$EXP_UI_PROTOCOL" ]; then
-    ko "PROTOCOL_VERSION wurde auf den ext-apps-Wert angeglichen — genau der Fehler aus §11"
-  else
-    ok "PROTOCOL_VERSION trägt nicht den ext-apps-Wert"
-  fi
-
-  # Nur den ui/initialize-Aufrufblock betrachten. PROTOCOL_VERSION wird anderswo
-  # (initialize-Response, server-card) völlig korrekt referenziert — ein dateiweiter
-  # Grep erzeugt dort False Positives.
-  UI_BLOCK=$(awk 'index($0,"sendRequest(\"ui/initialize\"")>0{f=1} f{print; n++} n>8{exit}' "$REPO_ROOT/index.js")
-
-  if [ -z "$UI_BLOCK" ]; then
-    ko "ui/initialize-Aufruf in index.js nicht gefunden — verschoben oder umbenannt?"
-  else
-    case "$UI_BLOCK" in
-      *"protocolVersion: \"$EXP_UI_PROTOCOL\""*)
-        ok "ui/initialize protocolVersion = $EXP_UI_PROTOCOL als Literal (§11)" ;;
-      *protocolVersion*PROTOCOL_VERSION*)
-        ko "ui/initialize referenziert PROTOCOL_VERSION statt des ext-apps-Literals (§11)" ;;
-      *)
-        ko "ui/initialize protocolVersion fehlt oder != $EXP_UI_PROTOCOL — MCP Apps failen STILL" ;;
-    esac
-  fi
-
 else
-  echo "  (index.js nicht gefunden — Source-Checks übersprungen)"
+  ko "index.js nicht gefunden — Source-Invarianten nicht prüfbar (läuft der Probe im Repo-Root?)"
+fi
+
+# Die QUELLREINEN Assertions (§11) liegen in tests/source-invariants.sh: eine
+# Implementierung, zwei Aufrufer. Sie laufen zusätzlich im unit-Job, der nie
+# übersprungen wird — hier bleiben sie Teil des Gesamtbilds, damit ein manueller
+# Probe-Lauf vor einem PR weiterhin alles zeigt. Sie zählen als EIN Eintrag in der
+# Summe unten; ihre Detailzeilen druckt das Skript selbst.
+if bash "$REPO_ROOT/tests/source-invariants.sh" --nested; then
+  ok "Quell-Invarianten (tests/source-invariants.sh)"
+else
+  ko "Quell-Invarianten (tests/source-invariants.sh) — Details in den Zeilen darüber"
 fi
 
 # =============================================================================

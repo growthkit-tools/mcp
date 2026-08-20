@@ -22,7 +22,21 @@ jobs:
 
       # Erster Step: kostet Millisekunden, faengt Syntaxfehler, die bash sonst
       # erst zur Laufzeit meldet — nachdem die halbe Datei schon gelaufen ist.
-      - run: bash -n scripts/probe.sh
+      # Alle drei Bash-Dateien, auf die CI sich stuetzt.
+      - name: Bash-Syntax
+        run: |
+          bash -n scripts/probe.sh
+          bash -n tests/source-invariants.sh
+          bash -n tests/report-tools.sh
+
+      # Quellreine Invarianten (AGENTS.md §11): reine Funktionen des Checkouts —
+      # kein HTTP, keine laufende Instanz, kein Workers Build. Deshalb HIER und
+      # nicht im probe-Job: der wird uebersprungen, sobald ein Commit nur
+      # build-watch-excluded Pfade anfasst (*.md, tests/**, scripts/**, .github/**,
+      # .claude/**, specs/**) — und genau dann waere eine kaputte quellreine
+      # Assertion still gruen geblieben und erst beim naechsten index.js-Commit
+      # aufgefallen. Steht vor npm, weil der Check kein node braucht.
+      - run: bash tests/source-invariants.sh
 
       - uses: actions/setup-node@v4
         with:
