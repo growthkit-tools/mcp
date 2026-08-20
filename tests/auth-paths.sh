@@ -11,8 +11,9 @@
 #
 # SECRET-FREI, und zwar nicht nur zufällig: geprüft werden ausschließlich
 # Negativfälle und öffentliche Methoden. Der Positivfall braucht ein echtes
-# gk_-Token und bleibt ein manueller Schritt (specs/mcp-gk-bearer-auth.md §6),
-# bis es einen dedizierten Test-Workspace gibt.
+# gk_-Token und bleibt ein manueller Schritt (§6 der lokalen, bewusst nicht
+# getrackten Spec mcp-gk-bearer-auth.md), bis es einen dedizierten
+# Test-Workspace gibt.
 #
 # WARUM data.path. Beide Ablehnungspfade — OAuth und gk_ — antworten mit derselben
 # Meldung "Invalid or expired token". Das ist Absicht: die Meldung darf nicht
