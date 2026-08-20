@@ -1,8 +1,14 @@
-# .claude/ bleibt ignoriert — AUSSER settings.json. Die ist die geteilte,
-# reproduzierbare Konfiguration; settings.local.json ist persoenlich und waechst
-# durch weggeklickte Permission-Prompts, gehoert also nicht ins Repo.
+# .claude/ bleibt ignoriert — AUSSER settings.json und hooks/. Beide sind die
+# geteilte, reproduzierbare Konfiguration; settings.local.json ist persoenlich
+# und waechst durch weggeklickte Permission-Prompts, gehoert also nicht ins Repo.
+#
+# !.claude/hooks/ muss das VERZEICHNIS wiedereinschliessen, nicht die Datei darin:
+# git kann eine Datei nicht wiedereinschliessen, solange ihr Elternverzeichnis
+# ausgeschlossen ist. Mit `!.claude/hooks/guard-push.sh` allein blieb der Guard
+# ungetrackt — und damit genau das nicht reproduzierbar, wofuer diese Ausnahme da ist.
 .claude/*
 !.claude/settings.json
+!.claude/hooks/
 gk-mcp-key.pem
 *.pem
 mcp-publisher

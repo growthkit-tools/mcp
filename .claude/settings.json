@@ -24,5 +24,23 @@
     "//readNote": "Read(//home/coder/projects/**) ist eine bewusste Entscheidung, keine weggeklickte Regel: die Nachbar-Repos sind Lesereferenz. chrome-extension ist laut AGENTS.md §16 die visuelle Source of Truth fuer die vc-*-Klassen und Design-Tokens; supabase haelt die Edge-Function-Contracts, gegen die der Worker geprueft wird (get-seo-history, n8n-embed, weekly-seo-report). Beide sind read-only Referenz — §17 verbietet das Editieren der Extension ausdruecklich.",
 
     "//nichtAufgenommen": "mcp__claude_ai_Supabase__execute_sql bleibt DRAUSSEN. Der Toolname sagt nicht 'nur lesen', und execute_sql kann schreiben. Eine getrackte Blanko-Freigabe waere zu breit; im Einzelfall wird gefragt. Ebenso draussen: Bash(git *), Bash(node *), Bash(python3 *), Bash(awk *), Bash(grep *) — alle vier waren in settings.local.json angesammelt, Bash(git *) haette jeden Push-Stopp aufgehoben."
+  },
+
+  "//hooks": "BEWUSST OHNE 'if'-Filter. Die naheliegende Verdrahtung \"if\": \"Bash(git push:*)\" ist Praefix-Matching — 'cd /x && git push' beginnt nicht mit 'git push', der Hook wuerde gar nicht starten und das Kommando liefe durch. Fail-open ueber den Filter. Der Guard laeuft deshalb auf JEDEM Bash-Aufruf und entscheidet selbst; sein schneller Pfad (kein 'git' im Kommando) haelt die Kosten klein. Aufruf ueber 'bash <pfad>' statt direkt, damit er nicht am Exec-Bit haengt — core.fileMode=false macht chmod hier unsichtbar.",
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/guard-push.sh",
+            "timeout": 10,
+            "statusMessage": "Push-Ziel pruefen"
+          }
+        ]
+      }
+    ]
   }
 }
