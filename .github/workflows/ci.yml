@@ -61,6 +61,11 @@ jobs:
   probe:
     name: Probe (Preview)
     runs-on: ubuntu-latest
+    # Fuer den authed-smoke-Job: er braucht dieselbe Warte-Entscheidung und
+    # dieselbe URL. Ueber Outputs statt ueber eine zweite Kopie der Logik.
+    outputs:
+      skip:   ${{ steps.wait.outputs.skip }}
+      target: ${{ steps.target.outputs.target }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,6 +136,7 @@ jobs:
       # ausserhalb davon unsichtbar — der Report-Test haette sie duplizieren
       # muessen, und zwei Kopien derselben URL-Herleitung driften.
       - name: Target-URL bestimmen
+        id: target
         if: steps.wait.outputs.skip == 'false'
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -146,7 +152,10 @@ jobs:
             TARGET="https://${SLUG}-growthkit-mcp.purple-sun-a0b3.workers.dev"
           fi
           echo "Target: $TARGET"
-          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+          # $GITHUB_ENV fuer die Folge-Steps in DIESEM Job, $GITHUB_OUTPUT fuer
+          # den authed-smoke-Job — Jobs teilen kein $GITHUB_ENV.
+          echo "TARGET=$TARGET"  >> "$GITHUB_ENV"
+          echo "target=$TARGET"  >> "$GITHUB_OUTPUT"
 
       - name: Probe ausfuehren
         if: steps.wait.outputs.skip == 'false'
@@ -194,53 +203,62 @@ jobs:
   # Secrets durch. Als Step im probe-Job wuerde jeder Fork-PR den probe-Job rot
   # faerben; als eigener Job ist das Nicht-Laufen ein eigener, sichtbarer Zustand.
   #
-  # BEWUSST OHNE `needs: probe`. Technisch ginge es (Job-Outputs statt der
-  # duplizierten TARGET-Herleitung unten), aber dann haengt dieser Job am Ergebnis
-  # des probe-Jobs — und ein roter oder uebersprungener Probe wuerde die
-  # authentifizierte Abdeckung mitreissen. Dieselbe Ueberlegung wie beim always()
-  # am Report-Test: faellt das eine aus, ist das andere gerade dann interessant.
-  # Die TARGET-Duplikation ist der bewusst gezahlte Preis dafuer — wer sie spaeter
-  # mit `needs:` "optimiert", koppelt die beiden Jobs wieder zusammen.
+  # `needs: probe` + `if: always()` — die Kombination ist tragend und die beiden
+  # Haelften bedeuten VERSCHIEDENES:
+  #   * needs:   koppelt die REIHENFOLGE. Ohne das startet dieser Job sofort und
+  #              probt, bevor der Workers Build fertig ist. Genau so ist der erste
+  #              Lauf gescheitert: Job-Start 15:17:53, Abbruch 15:18:00, Build erst
+  #              15:19:24 fertig — 84 s zu frueh. Das war kein Flake, sondern das
+  #              deterministische Ergebnis jedes Laufs.
+  #   * always() entkoppelt das ERGEBNIS. Der Job laeuft auch, wenn probe rot ist —
+  #              gerade dann ist die authentifizierte Diagnose interessant.
+  # Wer needs: entfernt, um die Jobs zu "entkoppeln", entkoppelt die falsche
+  # Haelfte und baut den Fehler von oben wieder ein.
+  #
+  # Warte-Entscheidung und Ziel-URL kommen als Job-Outputs aus probe. Keine zweite
+  # Kopie der Build-Erkennung und keine zweite Kopie der Slug-Herleitung.
   authed-smoke:
     name: Authed Smoke
     runs-on: ubuntu-latest
+    needs: probe
+    if: always()
     steps:
       - uses: actions/checkout@v4
 
-      - name: Target-URL bestimmen
-        env:
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          set -uo pipefail
-          if [ "$BRANCH" = "main" ]; then
-            TARGET="https://mcp.growthkit.tools"
-          else
-            SLUG="${BRANCH//\//-}"
-            TARGET="https://${SLUG}-growthkit-mcp.purple-sun-a0b3.workers.dev"
-          fi
-          echo "Target: $TARGET"
-          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
-
       # Das Fork-Gate steht auf STEP-Ebene, NICHT am Job. Stuende es am Job, wuerde
-      # der ganze Job uebersprungen — einschliesslich des warnenden Steps darunter,
-      # und die fehlende Abdeckung waere wieder still. Genau das soll die Warnung
-      # verhindern.
+      # der ganze Job uebersprungen — einschliesslich der warnenden Steps darunter,
+      # und die fehlende Abdeckung waere wieder still.
       #
       # KEINE Bedingung auf "Secret vorhanden": ein fehlendes Secret expandiert zum
       # leeren String und laeuft im Skript in den Setup-Guard (exit 2). Ein
-      # falsches Token laeuft in die Kollisions-Assertion (exit 1). Beide Wege sind
-      # rot, aber unterscheidbar — siehe Kopf von tests/authed-smoke.sh.
+      # falsches Token laeuft in die Kollisions-Assertion (exit 1). Beide rot, aber
+      # unterscheidbar — siehe Kopf von tests/authed-smoke.sh.
+      #
+      # skip == 'false' aus demselben Grund wie im probe-Job: der wait-Step setzt
+      # den Output NUR auf seinen Erfolgspfaden. Bei fehlgeschlagenem Build oder
+      # Timeout ist er leer, und `!= 'true'` wuerde zusammen mit always() gegen eine
+      # veraltete Preview proben.
       - name: Authed Smoke
-        if: github.event.pull_request.head.repo.fork != true
+        if: needs.probe.outputs.skip == 'false' && github.event.pull_request.head.repo.fork != true
         env:
           GK_TOKEN: ${{ secrets.GK_CI_TOKEN }}
+          TARGET:   ${{ needs.probe.outputs.target }}
         run: |
           set -uo pipefail
           echo "Authed Smoke gegen: $TARGET"
           chmod +x tests/authed-smoke.sh
           ./tests/authed-smoke.sh "$TARGET"
 
-      - name: Hinweis — authentifizierte Abdeckung uebersprungen
+      # ZWEI getrennte Hinweise, nicht einer: "kein Secret wegen Fork" und "keine
+      # Flaeche zum Proben" sind verschiedene Ursachen mit verschiedenen Fixes. Ein
+      # gemeinsamer Text waere wieder eine Signatur fuer zwei Faelle — derselbe
+      # Fehler wie beim doppeldeutigen exit 2.
+      - name: Hinweis — Fork-PR, kein Secret
         if: github.event.pull_request.head.repo.fork == true
         run: |
           echo "::warning::Fork-PR — GitHub reicht keine Secrets durch. Der authentifizierte Smoke-Test ist NICHT gelaufen: Rollenfilterung, gk_-Auth-Pfad und der Beispielwert-Test aus #4 sind in diesem Lauf ungeprueft."
+
+      - name: Hinweis — keine Preview-Flaeche
+        if: needs.probe.outputs.skip != 'false' && github.event.pull_request.head.repo.fork != true
+        run: |
+          echo "::warning::Kein Workers Build fuer diesen Commit (oder Build fehlgeschlagen) — es gibt keine Preview-Flaeche. Der authentifizierte Smoke-Test ist NICHT gelaufen; Rollenfilterung, gk_-Auth-Pfad und der Beispielwert-Test aus #4 sind ungeprueft."
