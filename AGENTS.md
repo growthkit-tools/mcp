@@ -74,16 +74,37 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
   erzeugt eine **Preview-Version mit eigener URL**, ohne Production anzufassen.
   ⚠️ Preview-Versionen nutzen **dieselben Bindings und Secrets wie Production** — sie
   sprechen mit der echten Supabase. Probes dürfen nur lesen.
-- **Build-Watch-Excludes:** `*.md`, `specs/**`, `.claude/**`, `.github/**`, `tests/**`,
-  `scripts/**` lösen **keinen** Build aus. Regel dahinter: ausgeschlossen wird, was das
-  ausgelieferte Deployable nicht verändert. **Aber sie greifen erst auf einem Branch mit
-  Build-Historie — der erste Push eines neuen Branches baut immer**, weil es ohne
-  vorherigen Build keine Diff-Basis gibt. Beides belegt: `abe9ca3` (erster Push, nur
-  exkludierte Pfade, baute trotzdem) gegen die Merge-Commits `9670879` und `7187c66` auf
-  `main` (nur exkludierte Pfade, kein Build, `probe`-Job übersprungen). „Kein Build" ist
-  also nichts, was man vom ersten Push eines Branches erwarten darf. Autoritativ ist die
-  Liste im Cloudflare-Dashboard; `.github/workflows/ci.yml` spiegelt sie im Kommentar am
-  `wait`-Step. *(Beobachtet, 20.08.)*
+- **Build-Watch-Konfiguration** (Dashboard, dort am 20.08. nachgesehen):
+  Include `*` · Exclude `*.md`, `specs/**`, `.claude/**`, `.github/**`, `tests/**`,
+  `scripts/**`. Gedanke dahinter: ausgeschlossen wird, was das ausgelieferte Deployable
+  nicht verändert.
+
+  **Wann die Excludes tatsächlich greifen, ist nur teilweise belegt.** Der Belegstand,
+  und nur er:
+  - Merge-Commits auf `main` mit ausschließlich exkludierten Pfaden bauen **nicht**
+    (`9670879`, `7187c66` — `probe`-Job übersprungen).
+  - Der **erste** Push eines neuen Branches baut **immer**, auch mit ausschließlich
+    exkludierten Pfaden (`abe9ca3`).
+  - Ein **Folge-Push** auf einem Branch mit Build-Historie baut **ebenfalls** —
+    `a198ebd` fasste nur `AGENTS.md` an und hat gebaut, obwohl `*.md` im Dashboard als
+    Exclude gesetzt ist (PR #10, Step-Conclusions geprüft: kein Step `skipped`).
+
+  ⚠️ **Warum die Excludes auf Feature-Branches nicht greifen, ist OFFEN.** Nicht raten,
+  und aus den drei Punkten keine Regel extrapolieren: **„kein Build" ist auf einem
+  Feature-Branch derzeit nicht vorhersagbar.** Die frühere Fassung dieser Zeile
+  behauptete, die Excludes griffen „ab einem Branch mit Build-Historie" — das war aus
+  den `main`-Merge-Commits extrapoliert und ist durch `a198ebd` widerlegt.
+  *(Beobachtet, 20.08.)*
+
+- **Die Build-Konfiguration lebt ausschließlich im Cloudflare-Dashboard** — Include- und
+  Exclude-Paths, Deploy- und Version-Command, Branch-Einstellungen. Sie hinterlässt
+  **keine Repo-Spur**: keine Datei definiert sie, und wenn sie sich ändert, zeigt das
+  kein Diff. Jede Aussage darüber im Repo — diese Datei, der Kommentar am `wait`-Step in
+  `ci.yml` — ist eine **Kopie mit Stand-Datum** und kann still veraltet sein.
+  **Vor Gebrauch nachsehen lassen, nicht aus der Datei zitieren.** Am 20.08. lagen wir
+  dreimal darüber falsch; jedes Mal war die Korrektur ein Blick ins Dashboard und keine
+  Analyse. Ein Agent kommt nicht heran — also fragen, nicht schlussfolgern.
+  *(Beobachtet, 20.08.)*
 
 ### Dieses Repo ist ÖFFENTLICH
 

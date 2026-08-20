@@ -88,11 +88,19 @@ jobs:
               # .github/**, tests/**, scripts/**. Autoritativ ist die Liste im
               # Cloudflare-Dashboard — das hier ist eine Kopie und kann driften.
               #
-              # ACHTUNG (verifiziert 20.08.): Die Excludes greifen erst auf einem Branch
-              # MIT Build-Historie. Der erste Push eines NEUEN Branches baut immer, auch
-              # wenn er nur exkludierte Pfade anfasst — ohne vorherigen Build gibt es
-              # keine Diff-Basis. "Kein Build" ist also nichts, was man vom ersten Push
-              # eines Branches erwarten darf.
+              # ACHTUNG (Stand 20.08.): WANN die Excludes greifen, ist nur teilweise
+              # belegt. Belegstand:
+              #   * Merge-Commits auf main mit nur exkludierten Pfaden bauen NICHT.
+              #   * Der erste Push eines NEUEN Branches baut IMMER (keine Diff-Basis).
+              #   * Ein Folge-Push auf einem Branch MIT Build-Historie baut EBENFALLS
+              #     (a198ebd: nur AGENTS.md, gebaut, obwohl *.md als Exclude gesetzt
+              #     ist — im Dashboard am 20.08. nachgesehen).
+              # Warum die Excludes auf Feature-Branches nicht greifen, ist OFFEN.
+              #
+              # Fuer diesen Zweig heisst das: er ist korrekt fuer den Fall, dass
+              # Cloudflare nicht baut — aber WANN das eintritt, wissen wir nicht.
+              # "Kein Build" ist auf einem Feature-Branch derzeit nicht vorhersagbar,
+              # also nichts, was man erwarten oder woraus man etwas schliessen darf.
               if [ "$i" -ge 8 ]; then
                 echo "skip=true" >> "$GITHUB_OUTPUT"
                 echo "::notice::Kein Workers Build fuer diesen Commit — Probe uebersprungen."
