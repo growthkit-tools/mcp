@@ -2692,7 +2692,7 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                domain: { type: "string", description: "Optional. Domain slug, e.g. 'growthkit.tools'. Omit to return all domains." },
+                domain: { type: "string", description: "Optional. Domain SLUG, not the bare hostname — dots become hyphens, e.g. 'growthkit-tools' (not 'growthkit.tools'), 'growthkit-consulting'. Omit to return all domains. An unknown slug yields an empty result, not an error." },
                 weeks:  { type: "integer", minimum: 1, maximum: 52, description: "Optional. Number of most recent weeks. Default 12." },
               },
               required: [],
@@ -2705,7 +2705,7 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                domain: { type: "string", description: "Optional. Domain slug, e.g. 'growthkit.tools'. Omit to return all domains." },
+                domain: { type: "string", description: "Optional. Domain SLUG, not the bare hostname — dots become hyphens, e.g. 'growthkit-tools' (not 'growthkit.tools'), 'growthkit-consulting'. Omit to return all domains. An unknown slug yields an empty result, not an error." },
                 weeks:  { type: "integer", minimum: 1, maximum: 52, description: "Optional. Number of most recent weeks. Default 12." },
               },
               required: [],
