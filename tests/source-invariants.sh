@@ -91,5 +91,85 @@ else
   esac
 fi
 
+# --- Rollen-Maps · toolRoleMap ≡ toolPermissions ------------------------------
+# Zwei von Hand gepflegte Kopien derselben Rollenzuordnung: toolRoleMap filtert
+# tools/list, toolPermissions bewacht tools/call. Driften sie auseinander, taucht
+# ein Tool im Katalog auf, das der Guard nicht kennt — und ein fehlender
+# toolPermissions-Eintrag faellt durch (`toolPermissions[name] && …` ist dann
+# falsch, es wird gar nicht geprueft). Bis heute bewachte das nichts.
+#
+# BEWUSST OHNE absolute Zahlen: "68 Tools" muesste bei jedem neuen Tool
+# nachgezogen werden. Geprueft werden Beziehungen, die nicht driften.
+#
+# ZWEI PARSE-FALLEN, beide empirisch gefunden, beide erzeugen stille Falschaussagen:
+#   (1) toolPermissions hat MEHRERE Eintraege pro Zeile. Ein am Zeilenanfang
+#       verankertes Muster zaehlt 61 statt 68 -> falscher Drift-Alarm.
+#   (2) Beide Bloecke enthalten eine Kommentarzeile mit _meta.ui.visibility:["app"].
+#       Ohne Kommentar-Strippen entsteht ein Phantom-Schluessel `visibility`.
+# Deshalb: Kommentarzeilen raus, danach unverankert scannen.
+#
+# Flags in FESTER Reihenfolge statt sortiert — asort() gibt es nur in gawk, und
+# auf dem Runner ist awk nicht zwingend gawk.
+ROLEMAP_AWK='
+BEGIN { f=0 }
+$0 ~ ("const " NAME " = \\{") { f=1; next }
+f && /^        \};/ { exit }
+f {
+  line = $0
+  if (line ~ /^[[:space:]]*\/\//) next
+  while (match(line, /[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*\[[^]]*\]/)) {
+    ent  = substr(line, RSTART, RLENGTH)
+    line = substr(line, RSTART + RLENGTH)
+    k = ent; sub(/:.*/, "", k); gsub(/[[:space:]]/, "", k)
+    r = ent; sub(/^[^[]*\[/, "", r); sub(/\]$/, "", r)
+    n = gsub(/"/, "\"", r) / 2
+    flags = ""
+    if (r ~ /"admin"/) flags = flags "a"
+    if (r ~ /"team"/)  flags = flags "t"
+    if (r ~ /"view"/)  flags = flags "v"
+    printf "%s\t%s\t%d\n", k, flags, n
+  }
+}'
+rolemap(){ awk -v NAME="$1" "$ROLEMAP_AWK" "$SRC" | sort; }
+
+RM_N=$(rolemap toolRoleMap     | wc -l | tr -d ' ')
+TP_N=$(rolemap toolPermissions | wc -l | tr -d ' ')
+
+# Der §18a-Guard: ohne ihn laufen alle folgenden Pruefungen ueber leeren Listen
+# LEER-WAHR durch. Ein umbenannter Block wuerde still gruen bleiben.
+if [ "$RM_N" -eq 0 ] || [ "$TP_N" -eq 0 ]; then
+  ko "Rollen-Map nicht geparst (toolRoleMap=$RM_N, toolPermissions=$TP_N) — umbenannt oder umformatiert?"
+else
+  ok "Rollen-Maps geparst (je $RM_N Einträge)"
+
+  if diff <(rolemap toolRoleMap) <(rolemap toolPermissions) >/dev/null 2>&1; then
+    ok "toolRoleMap ≡ toolPermissions (Schlüssel und Rollen)"
+  else
+    ko "toolRoleMap und toolPermissions weichen ab — tools/list und tools/call widersprechen sich:"
+    diff <(rolemap toolRoleMap) <(rolemap toolPermissions) | head -20 | sed 's/^/      /'
+  fi
+
+  # Unbekannte Rolle: die Flags kennen nur admin/team/view. Taucht eine vierte
+  # auf, ist length(flags) kleiner als die Zahl der gequoteten Werte — sonst
+  # wuerde sie stillschweigend ignoriert.
+  UNKNOWN=$(rolemap toolRoleMap | awk -F'\t' 'length($2) != $3 { print $1 }' | tr '\n' ' ')
+  if [ -z "$UNKNOWN" ]; then
+    ok "Keine unbekannten Rollen (nur admin/team/view)"
+  else
+    ko "Unbekannte Rolle in: $UNKNOWN"
+  fi
+
+  # view ⊆ team ⊆ admin. Eine Rolle, die etwas darf, was die naechsthoehere nicht
+  # darf, ist fast immer ein Tippfehler in einer der beiden Listen.
+  VIOL=$(rolemap toolRoleMap | awk -F'\t' '
+    $2 ~ /v/ && $2 !~ /t/ { print $1 " (view ohne team)" }
+    $2 ~ /t/ && $2 !~ /a/ { print $1 " (team ohne admin)" }' | tr '\n' ' ')
+  if [ -z "$VIOL" ]; then
+    ok "Rollen-Hierarchie: view ⊆ team ⊆ admin"
+  else
+    ko "Rollen-Hierarchie verletzt: $VIOL"
+  fi
+fi
+
 [ "$NESTED" -eq 1 ] || printf '\n\033[1m%s\033[0m\n' "Ergebnis: $PASS grün, $FAIL rot"
 [ "$FAIL" -eq 0 ] || exit 1
