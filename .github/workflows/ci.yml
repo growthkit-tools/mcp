@@ -94,8 +94,12 @@ jobs:
           echo "::error::Timeout beim Warten auf den Workers Build (10 min)."
           exit 1
 
-      - name: Probe ausfuehren
-        if: steps.wait.outputs.skip != 'true'
+      # Eigener Step, damit MEHRERE Folge-Steps dieselbe URL benutzen koennen.
+      # Vorher lag die Slug-Logik als Shell-Variable im Probe-Step und war
+      # ausserhalb davon unsichtbar — der Report-Test haette sie duplizieren
+      # muessen, und zwei Kopien derselben URL-Herleitung driften.
+      - name: Target-URL bestimmen
+        if: steps.wait.outputs.skip == 'false'
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
@@ -109,6 +113,34 @@ jobs:
             SLUG="${BRANCH//\//-}"
             TARGET="https://${SLUG}-growthkit-mcp.purple-sun-a0b3.workers.dev"
           fi
+          echo "Target: $TARGET"
+          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+
+      - name: Probe ausfuehren
+        if: steps.wait.outputs.skip == 'false'
+        run: |
+          set -uo pipefail
           echo "Probe gegen: $TARGET"
           chmod +x scripts/probe.sh
           ./scripts/probe.sh "$TARGET"
+
+      # always(): der Report-Test muss auch dann laufen, wenn probe.sh rot ist.
+      # Sonst zeigt ein Lauf nur die halbe Diagnose — dasselbe Prinzip, aus dem
+      # probe.sh kein `set -e` benutzt.
+      #
+      # Zum Guard (gilt fuer alle drei Steps oben, deshalb einheitlich
+      # `== 'false'`): der wait-Step setzt skip NUR auf seinen Erfolgspfaden —
+      # false = Build da, true = kein Build fuer diesen Commit. Bei
+      # fehlgeschlagenem Build oder Timeout beendet er sich mit exit 1 und setzt
+      # den Output gar nicht. `!= 'true'` ist auf einem leeren Output wahr; in
+      # Kombination mit always() wuerde der Step dann feuern und eine veraltete
+      # oder nicht existierende Preview-URL proben. Ohne always() ist die
+      # Schreibweise folgenlos — aber zwei Schreibweisen fuer dieselbe Bedingung
+      # sind eine Drift-Quelle, also ueberall dieselbe.
+      - name: Report-Tools testen
+        if: always() && steps.wait.outputs.skip == 'false'
+        run: |
+          set -uo pipefail
+          echo "Report-Tools gegen: $TARGET"
+          chmod +x tests/report-tools.sh
+          ./tests/report-tools.sh "$TARGET"
