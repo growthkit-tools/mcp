@@ -13,3 +13,12 @@ specs/
 
 # Node
 node_modules/
+
+# Wrangler local dev state. Entsteht bei jedem `npm run dev` — und das ist ab
+# jetzt der Standardweg, um den Golden Master zu erzeugen (lokal statt gegen
+# eine Preview: kein amend, kein force-push, keine Race zwischen zwei Pushes).
+.wrangler/
+
+# Agent-/Arbeits-Scratchpads. Liegen normalerweise ausserhalb des Repos; der
+# Eintrag ist die Absicherung dagegen, dass mal eins hier drin landet.
+scratchpad/

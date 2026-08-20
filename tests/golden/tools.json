@@ -408,6 +408,15 @@
   },
   {
     "meta": null,
+    "name": "getAeoReport",
+    "props": [
+      "domain",
+      "weeks"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
     "name": "getCampaign",
     "props": [
       "campaign_id"
@@ -457,6 +466,15 @@
     "name": "getOpenTasks",
     "props": [
       "limit"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
+    "name": "getSeoReport",
+    "props": [
+      "domain",
+      "weeks"
     ],
     "required": []
   },

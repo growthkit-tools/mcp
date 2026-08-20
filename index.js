@@ -69,6 +69,7 @@ const READ_ONLY_TOOLS = new Set([
   "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
   "show_callable_leads",
   "getWorkingMemory", "listTasks", "getOpenTasks",
+  "getSeoReport", "getAeoReport",
 ]);
 // Interim monthly cap for mcp_calls (write tools). Real tier limits arrive with
 // packaging (c366dcab) via usage_counters/gk_meter's p_limit. TUNE.
@@ -1057,6 +1058,11 @@ export default {
     const EDGE_SCORE_LEADS_URL   = `${env.SUPABASE_URL}/functions/v1/score-leads`;
     const EDGE_GET_TOP_LEADS_URL = `${env.SUPABASE_URL}/functions/v1/get-top-leads`;
     const EDGE_EMAIL_COMPOSE_URL = `${env.SUPABASE_URL}/functions/v1/email-compose`;
+    // Weekly report history. NOTE: these two authenticate ONLY via body.user_token —
+    // they are verify_jwt=false and their source says "NO N8N_AUTH_TOKEN path — that is
+    // cron-only". They must NOT be called through callEdge(). See the tools/call handler.
+    const EDGE_SEO_HISTORY_URL = `${env.SUPABASE_URL}/functions/v1/get-seo-history`;
+    const EDGE_AEO_HISTORY_URL = `${env.SUPABASE_URL}/functions/v1/get-aeo-history`;
 
     console.log("==== INCOMING REQUEST ====");
     console.log("PATH:", url.pathname, "METHOD:", request.method);
@@ -2675,6 +2681,36 @@ export default {
               },
             },
           },
+          // Weekly Report Tools — read-only history of the SEO/AEO reports the cron
+          // writes per week and domain. Plain model-visible read tools: no _meta (not
+          // app-private), no required args. The worker hands the data through
+          // unaggregated — interpretation is the model's job, not the worker's.
+          {
+            name: "getSeoReport",
+            title: "SEO Report History",
+            description: "Read the weekly SEO report history for this workspace's domains: Google Search Console clicks and impressions, average position, AI-referral sessions and content-brief counts — one data point per ISO week, oldest first. Returns { domains: { <domain-slug>: { series: [...], latest_card } } }. IMPORTANT: avg_position is null for a week with no data — null is NOT zero and must never be charted or averaged as zero. Omit domain to get every domain the workspace tracks. Use when the user asks how SEO, organic search or Search Console performance developed over time.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                domain: { type: "string", description: "Optional. Domain slug, e.g. 'growthkit.tools'. Omit to return all domains." },
+                weeks:  { type: "integer", minimum: 1, maximum: 52, description: "Optional. Number of most recent weeks. Default 12." },
+              },
+              required: [],
+            },
+          },
+          {
+            name: "getAeoReport",
+            title: "AEO Report History",
+            description: "Read the weekly AEO report history — how this workspace's brand shows up in AI answer engines. Per ISO week and domain: visibility, share_of_voice and own_cited (all ratios 0..1, multiply by 100 to display a percentage), avg_position (1 = best; null = never mentioned that week, NOT zero), plus prompts_scored and attempted_but_no_data. Returns { domains: { <domain-slug>: { series: [...], latest_card } } }. Omit domain to get every tracked domain. Use when the user asks about AI-search visibility, share of voice in LLM answers, or how often the brand gets cited.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                domain: { type: "string", description: "Optional. Domain slug, e.g. 'growthkit.tools'. Omit to return all domains." },
+                weeks:  { type: "integer", minimum: 1, maximum: 52, description: "Optional. Number of most recent weeks. Default 12." },
+              },
+              required: [],
+            },
+          },
         ];
 
         // Role-based tool filtering
@@ -2755,6 +2791,9 @@ export default {
           updateTask:     ["admin", "team"],
           setTaskWeights: ["admin", "team"],
           toggleStep:     ["admin", "team"],
+          // Weekly Report Tools — reads, all roles. Mirrors toolPermissions; keep in sync.
+          getSeoReport:   ["admin", "team", "view"],
+          getAeoReport:   ["admin", "team", "view"],
         };
 
         // Tool annotations (MCP readOnlyHint/destructiveHint/openWorldHint) for
@@ -2881,6 +2920,9 @@ export default {
           updateTask:     ["admin", "team"],
           setTaskWeights: ["admin", "team"],
           toggleStep:     ["admin", "team"],
+          // Weekly Report Tools — reads, all roles. Mirrors toolRoleMap; keep in sync.
+          getSeoReport:   ["admin", "team", "view"],
+          getAeoReport:   ["admin", "team", "view"],
         };
 
         if (userRole === "demo") {
@@ -3331,6 +3373,48 @@ if (name === "getChapterOverview") {
               id,
               error: { code: -32000, message: "Lead scoring error: " + e.message },
             });
+          }
+        }
+
+        // ── Weekly Reports (SEO / AEO) — dedicated dispatch, and deliberately NOT
+        //    through callEdge().
+        //
+        //    callEdge() attaches `Authorization: Bearer ${env.N8N_AUTH_TOKEN}` to every
+        //    request — that is how the memory tools (n8n-embed / n8n-search) and the
+        //    lead-scoring pair authenticate. get-seo-history / get-aeo-history do NOT
+        //    work that way: both are verify_jwt=false and their source states
+        //    "NO N8N_AUTH_TOKEN path — that is cron-only". They authenticate solely on
+        //    `user_token` in the body.
+        //
+        //    Sending the bearer anyway would be inert, but it would wire a second,
+        //    ineffective auth mechanism onto a body-token endpoint — the kind of drift
+        //    that later reads as "this path needs the n8n secret" and binds a secret
+        //    rotation to a call that never used it. So: plain fetch, Content-Type only.
+        if (name === "getSeoReport" || name === "getAeoReport") {
+          const url = name === "getSeoReport" ? EDGE_SEO_HISTORY_URL : EDGE_AEO_HISTORY_URL;
+          // Only forward what the caller actually set — the Edge Function applies its own
+          // defaults (weeks → 12) and treats an absent `domain` as "all domains".
+          const payload = { user_token: userToken };
+          if (typeof args.domain === "string" && args.domain) payload.domain = args.domain;
+          if (args.weeks !== undefined) payload.weeks = args.weeks;
+          try {
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const data = await res.json();
+            // Backend errors (401 invalid_token, 400 missing token, 500) surface as MCP
+            // errors rather than being swallowed into an empty result. An empty
+            // `domains` ({}) is NOT an error — it means this workspace has no reports
+            // yet — and passes through as a normal result.
+            if (!res.ok) {
+              return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Report backend error (" + res.status + "): " + JSON.stringify(data) }], isError: true } });
+            }
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data) }] } });
+          } catch (e) {
+            console.error(name + " error:", e);
+            return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Report error: " + e.message } });
           }
         }
 
