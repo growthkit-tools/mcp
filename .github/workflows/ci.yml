@@ -28,6 +28,7 @@ jobs:
           bash -n scripts/probe.sh
           bash -n tests/source-invariants.sh
           bash -n tests/report-tools.sh
+          bash -n tests/auth-paths.sh
 
       # Quellreine Invarianten (AGENTS.md §11): reine Funktionen des Checkouts —
       # kein HTTP, keine laufende Instanz, kein Workers Build. Deshalb HIER und
@@ -166,3 +167,14 @@ jobs:
           echo "Report-Tools gegen: $TARGET"
           chmod +x tests/report-tools.sh
           ./tests/report-tools.sh "$TARGET"
+
+      # Auth-Grenze. always() aus demselben Grund wie beim Report-Test: faellt
+      # probe.sh rot aus, ist die Auth-Diagnose gerade dann interessant.
+      # Secret-frei — nur Negativfaelle und oeffentliche Methoden.
+      - name: Auth-Pfade testen
+        if: always() && steps.wait.outputs.skip == 'false'
+        run: |
+          set -uo pipefail
+          echo "Auth-Pfade gegen: $TARGET"
+          chmod +x tests/auth-paths.sh
+          ./tests/auth-paths.sh "$TARGET"
