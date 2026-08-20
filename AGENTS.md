@@ -41,6 +41,16 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
   erzeugt eine **Preview-Version mit eigener URL**, ohne Production anzufassen.
   ⚠️ Preview-Versionen nutzen **dieselben Bindings und Secrets wie Production** — sie
   sprechen mit der echten Supabase. Probes dürfen nur lesen.
+- **Build-Watch-Excludes:** `*.md`, `specs/**`, `.claude/**`, `.github/**`, `tests/**`,
+  `scripts/**` lösen **keinen** Build aus. Regel dahinter: ausgeschlossen wird, was das
+  ausgelieferte Deployable nicht verändert. **Aber sie greifen erst auf einem Branch mit
+  Build-Historie — der erste Push eines neuen Branches baut immer**, weil es ohne
+  vorherigen Build keine Diff-Basis gibt. Beides belegt: `abe9ca3` (erster Push, nur
+  exkludierte Pfade, baute trotzdem) gegen die Merge-Commits `9670879` und `7187c66` auf
+  `main` (nur exkludierte Pfade, kein Build, `probe`-Job übersprungen). „Kein Build" ist
+  also nichts, was man vom ersten Push eines Branches erwarten darf. Autoritativ ist die
+  Liste im Cloudflare-Dashboard; `.github/workflows/ci.yml` spiegelt sie im Kommentar am
+  `wait`-Step. *(Beobachtet, 20.08.)*
 
 ### Dieses Repo ist ÖFFENTLICH
 
@@ -65,6 +75,10 @@ Tool-Versionen:  package.json (exakte Versionen, kein Caret) + package-lock.json
                  Node: 24.16.0 · Deno: 2.8.0 (nicht in diesem Repo genutzt)
 Lokal starten:   npm run dev                     # wrangler dev → localhost:8787
 Tests:           npm test                        # vitest + @cloudflare/vitest-pool-workers
+Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
+                 # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
+                 # in Sektion H mit --nested hierher. Einzige Kopie von
+                 # EXP_UI_PROTOCOL im Repo — nie eine zweite anlegen.
 Golden Master:   tests/golden/tools.json
 Golden updaten:  ./scripts/probe.sh <base-url> --update-golden
                  # NUR bei beabsichtigter Schema-Änderung
@@ -77,7 +91,11 @@ Golden LOKAL:    npm run dev                     # Terminal 1
                  # Commit gehört).
                  # Läuft OHNE .dev.vars: SUPABASE_URL steht in [vars], KV wird lokal
                  # simuliert, und A–G fassen nur unauthentifizierte Pfade an.
-                 # A–G gehen gegen die URL, H liest index.js vom Dateisystem.
+                 # Sektionen sind nicht gleichartig: A, C, D, E, F prüfen nur die
+                 # servierte Fläche. B (server.json), G (Golden) und H (index.js)
+                 # vergleichen den Checkout GEGEN die Fläche und gelten nur, wenn beide
+                 # Seiten aus demselben Commit stammen. Die frühere Kurzformel
+                 # „A–G gegen die URL, H von Disk" war falsch.
 Probe:           ./scripts/probe.sh <base-url>   # lokal oder Preview-Version-URL
 Preview-URL:     https://<branch-slug>-growthkit-mcp.purple-sun-a0b3.workers.dev
                  (Branch-Slug = Branch-Name mit '/' → '-')
@@ -181,14 +199,19 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
-    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Zwei
-      beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen: (a) eine
-      Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede Iteration
-      über eine Liste braucht daher zusätzlich eine Prüfung, dass die Liste nicht leer
-      ist; (b) in `jq` rebindet `|` das `.`, sodass `$d | contains(.)` zu
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Drei
+      beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
+      Mechanismus ist jedes Mal derselbe: **Abwesenheit wird als Bestehen gelesen.**
+      (a) eine Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede
+      Iteration über eine Liste braucht daher zusätzlich eine Prüfung, dass die Liste
+      nicht leer ist; (b) in `jq` rebindet `|` das `.`, sodass `$d | contains(.)` zu
       `$d contains $d` wird und immer wahr ist — Werte vor dem Vergleich mit `. as $e`
-      binden. Beides fällt beim Lesen nicht auf, nur beim Falsifizieren.
-      *(Beobachtet, 20.08.)*
+      binden; (c) ein Vergleich gegen einen Wert, der bei fehlender Quelle leer ist,
+      besteht immer — die **Existenz der Quelle** muss eigenständig geprüft werden.
+      Belege für (c): ein fehlendes `index.js` gab in `probe.sh` nur eine Notiz aus und
+      blieb grün; ein umbenanntes `const PROTOCOL_VERSION` lieferte `""` und war damit
+      gegen jeden Vergleich mit dem ext-apps-Wert grün. Alle drei fallen beim Lesen
+      nicht auf, nur beim Falsifizieren. *(Beobachtet, 20.08.)*
 19. **Tool-Schema-Änderungen nur mit Golden-Master-Update im selben Commit.** Wenn das
     Golden abweicht und du die Änderung nicht bewusst gemacht hast, ist **die Änderung der
     Bug** — nicht das Golden-File. Golden nie „reparieren", damit CI grün wird.
@@ -221,6 +244,18 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   Shared Helper betreffen, die andere Tools nutzen. Vor jeder Änderung: Aufrufer greppen.
 - Der Stateless-HTTP-RC (`server/discover`, kein `initialize`-Handshake) ist **additiv**
   geplant, kein Rewrite. Bestehende Handshake-Pfade bleiben funktionsfähig.
+
+- **`growthkit-mcp-demo` baut aus diesem Repo, deployt aber nicht `index.js`.** Sein Root
+  directory ist `/mcp-directory-shim`; ausgeliefert wird der Shim. Zwei Folgen: die
+  `probe.sh`-Assertions gelten für ihn **nicht**, und eine Änderung an `index.js`
+  verändert sein Deployable **nicht** — auch wenn sein Build grün danebensteht. Sein
+  Include-Watch-Path ist trotzdem `*`, er baut also bei jeder `index.js`-Änderung mit,
+  ohne dass sich etwas an ihm ändert; belegt am Merge-Commit `5be0777`, der beide Worker
+  gebaut hat. `mcp-directory-shim/**` wäre der richtige Include-Path — **nicht nebenbei
+  ändern**, eine Include-Path-Änderung ist ein eigener Vorgang mit eigener Verifikation.
+  Der `wait`-Step in `ci.yml` matcht deshalb exakt auf `Workers Builds: growthkit-mcp`;
+  ein Teilstring-Match würde den Shim-Build als „Build vorhanden" zählen.
+  *(Beobachtet, 20.08.)*
 
 - **Zwei Repräsentationen derselben Domain** in `supabase`,
   `functions/weekly-seo-report/index.ts`: ein **Slug** (Bindestriche) und ein **Label**
