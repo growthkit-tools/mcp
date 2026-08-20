@@ -1537,6 +1537,25 @@ export default {
           required: ["tasks"],
         };
 
+        // Shared `domain` argument for the two weekly-report tools.
+        //
+        // The example slugs live in ONE list, and BOTH the machine-readable
+        // `examples` and the prose description fall out of it — they cannot drift
+        // apart, and a test can assert the format without parsing prose.
+        //
+        // Slug, not hostname: domainSlug() in weekly-seo-report normalises the GSC
+        // property via .replace(/[^a-z0-9]+/g, "-"), so dots become hyphens. The
+        // neighbouring domainLabel() keeps the dots — that is the pair these values
+        // get confused with, and a wrong slug returns {} silently.
+        const REPORT_DOMAIN_EXAMPLES = ["growthkit-tools", "growthkit-consulting"];
+        const REPORT_DOMAIN_ARG = {
+          type: "string",
+          examples: REPORT_DOMAIN_EXAMPLES,
+          description: "Optional. Domain SLUG, not the bare hostname — dots become hyphens, e.g. " +
+            REPORT_DOMAIN_EXAMPLES.map(s => `'${s}'`).join(" or ") +
+            ". Omit to return all domains. An unknown slug yields an empty result, not an error.",
+        };
+
         const allTools = [
           {
             name: "embedMemory",
@@ -2692,7 +2711,7 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                domain: { type: "string", description: "Optional. Domain SLUG, not the bare hostname — dots become hyphens, e.g. 'growthkit-tools' (not 'growthkit.tools'), 'growthkit-consulting'. Omit to return all domains. An unknown slug yields an empty result, not an error." },
+                domain: REPORT_DOMAIN_ARG,
                 weeks:  { type: "integer", minimum: 1, maximum: 52, description: "Optional. Number of most recent weeks. Default 12." },
               },
               required: [],
@@ -2705,7 +2724,7 @@ export default {
             inputSchema: {
               type: "object",
               properties: {
-                domain: { type: "string", description: "Optional. Domain SLUG, not the bare hostname — dots become hyphens, e.g. 'growthkit-tools' (not 'growthkit.tools'), 'growthkit-consulting'. Omit to return all domains. An unknown slug yields an empty result, not an error." },
+                domain: REPORT_DOMAIN_ARG,
                 weeks:  { type: "integer", minimum: 1, maximum: 52, description: "Optional. Number of most recent weeks. Default 12." },
               },
               required: [],
