@@ -233,7 +233,12 @@ else
   # index.js & Co. getrackt sind. Erst --no-index prüft die REGELN. (Beim
   # Falsifizieren aufgefallen; durch Lesen nicht zu sehen.)
   # Der Index-Fall ist damit nicht ungeprüft — er ist die Secret-Prüfung unten.
-  MUST_IGNORE=".wrangler/state node_modules/pkg/index.js .dev.vars .env key.pem specs/x.md scratchpad/x"
+  # .gk-ci-token: lokaler gk_view_-Token fuer tests/authed-smoke.sh. Steht hier,
+  # BEVOR die Datei existiert — check-ignore --no-index prueft die Regel, nicht die
+  # Existenz. Die Ignore-Zeile und diese Assertion gehoeren in denselben Commit:
+  # ein Fenster, in dem die Regel ungeschuetzt ist, waere genau die Regression,
+  # gegen die die Positivliste da ist.
+  MUST_IGNORE=".wrangler/state node_modules/pkg/index.js .dev.vars .env key.pem specs/x.md scratchpad/x .gk-ci-token"
   MUST_TRACK="index.js AGENTS.md wrangler.toml tests/source-invariants.sh"
 
   NOT_IGNORED=""
