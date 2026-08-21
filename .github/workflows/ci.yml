@@ -30,6 +30,7 @@ jobs:
           bash -n tests/report-tools.sh
           bash -n tests/auth-paths.sh
           bash -n tests/authed-smoke.sh
+          bash -n tests/guard-push.sh
 
       # Quellreine Invarianten (AGENTS.md §11): reine Funktionen des Checkouts —
       # kein HTTP, keine laufende Instanz, kein Workers Build. Deshalb HIER und
@@ -39,6 +40,13 @@ jobs:
       # Assertion still gruen geblieben und erst beim naechsten index.js-Commit
       # aufgefallen. Steht vor npm, weil der Check kein node braucht.
       - run: bash tests/source-invariants.sh
+
+      # Selbsttest des Push-Guards. Gehoert aus demselben Grund hierher wie die
+      # Quell-Invarianten: kein HTTP, keine Instanz, kein Workers Build — und der
+      # unit-Job wird nie uebersprungen. Der Guard bringt seine Repo-Zustaende
+      # selbst mit, haengt also nicht daran, welchen Branch actions/checkout
+      # gerade ausgecheckt hat (push-Event: Branch, pull_request: detached HEAD).
+      - run: bash tests/guard-push.sh
 
       - uses: actions/setup-node@v4
         with:

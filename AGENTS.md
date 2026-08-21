@@ -401,7 +401,13 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   `cd <repo> && git push` ist Gewohnheit und trifft dieselbe Lücke. Was wie eine
   Leitplanke aussieht, ist ein Türschild, solange die Prüfung schwächer ist als die
   Menge der Formen, die sie treffen soll. Die `main`-Grenze zieht deshalb
-  `.claude/hooks/guard-push.sh`, nicht eine Regel. *(Beobachtet, 20.08.)*
+  `.claude/hooks/guard-push.sh`, nicht eine Regel.
+  **Die Regel wurde am 21.08. aus `~/.claude/settings.json` entfernt — nicht
+  vergessen, sondern ersetzt.** Wer sie zurückspielt, macht den Guard
+  **unerreichbar**: `deny` schlägt jedes `allow` und greift, bevor der Hook läuft.
+  Das Ergebnis wäre nicht „doppelt abgesichert", sondern genau die
+  Türschild-Illusion, gegen die der Guard gebaut wurde — nur diesmal mit einem
+  Guard, der stumm danebensteht. *(Beobachtet, 20.–21.08.)*
 
 - **Eine Sicherheitsprüfung darf nicht hinter einem Filter sitzen, der schwächer ist als
   sie selbst.** Hooks kennen ein `if`-Feld mit **derselben** Präfix-Semantik wie die
