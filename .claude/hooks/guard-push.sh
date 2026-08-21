@@ -33,13 +33,27 @@ set -uo pipefail
 PROTECTED='main master'
 
 allow(){ printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}\n'; exit 0; }
+
+# deny() escapt OHNE jq. Die erste Fassung benutzte `jq -Rs .` — und damit hing
+# ausgerechnet der Zweig, der ein fehlendes jq melden soll, an jq: ohne jq wurde
+# die Substitution leer und die Ausgabe war
+#   {"...","permissionDecisionReason":}}   <- ungueltiges JSON
+# Wie der Harness ungueltige Hook-Ausgabe liest, ist unbekannt; im schlechtesten
+# Fall fail-open, also genau die Richtung, gegen die dieser Guard gebaut wurde.
+# §18a (c) in Reinform: eine Pruefung, die verschwindet, sobald ihr Eingang
+# verschwindet. Gefunden von tests/guard-push.sh, bevor es jemand gebraucht hat.
+#
+# Die Begruendungen sind einzeilig und ASCII — Backslash und Anfuehrungszeichen
+# zu escapen reicht, und `sed` liegt dort, wo auch `git` liegt.
 deny(){
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
-    "$(printf '%s' "$1" | jq -Rs .)"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' \
+    "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
   exit 0
 }
 
-command -v jq >/dev/null 2>&1 || deny "guard-push: jq fehlt — ohne jq kann der Guard nicht entscheiden, also lehnt er ab (fail-closed)."
+# jq wird zum LESEN des Events gebraucht — ohne es gibt es kein .tool_input.command.
+# Der Zweig bleibt deshalb, aber deny() kommt jetzt ohne jq aus.
+command -v jq >/dev/null 2>&1 || deny "guard-push: jq fehlt — ohne jq kann der Guard das Event nicht lesen, also lehnt er ab (fail-closed)."
 
 EVENT=$(cat)
 CMD=$(printf '%s' "$EVENT" | jq -r '.tool_input.command // ""' 2>/dev/null)
