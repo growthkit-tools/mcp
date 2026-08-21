@@ -268,7 +268,7 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
-    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Drei
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Sechs
       beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
       Mechanismus ist jedes Mal derselbe: **Abwesenheit wird als Bestehen gelesen.**
       (a) eine Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede
@@ -279,8 +279,25 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
       besteht immer — die **Existenz der Quelle** muss eigenständig geprüft werden.
       Belege für (c): ein fehlendes `index.js` gab in `probe.sh` nur eine Notiz aus und
       blieb grün; ein umbenanntes `const PROTOCOL_VERSION` lieferte `""` und war damit
-      gegen jeden Vergleich mit dem ext-apps-Wert grün. Alle drei fallen beim Lesen
-      nicht auf, nur beim Falsifizieren.
+      gegen jeden Vergleich mit dem ext-apps-Wert grün.
+      (d) **invertiert-leer-wahr** — eine zu breite Regel macht *alle* Positivprüfungen
+      grün, und die Assertion prüft dann nur noch, **dass** etwas gilt, nicht dass das
+      **Richtige** gilt. Jede Positivliste braucht deshalb eine Gegenrichtung. Beleg:
+      ein `*` in `.gitignore` hätte alle „ist ignoriert"-Prüfungen bestanden; erst die
+      Negativkontrolle („diese Kerndateien dürfen NICHT ignoriert sein") fängt es.
+      (e) **Arbeitsbaum-Zustand ist in CI immer grün**, weil `actions/checkout` einen
+      sauberen Baum liefert — `git status --porcelain` ist dort stets leer. Prüfbar ist
+      nur, was eine **Funktion des Commits** ist. Beleg: „keine untracked
+      Build-Artefakte" wäre nie rot geworden; die prüfbare Invariante ist stattdessen,
+      dass die betreffenden Pfade *ignoriert* sind.
+      (f) **Ein Werkzeug konsultiert still eine andere Quelle als angenommen**, und das
+      Ergebnis ist plausibel und falsch. Beleg: `git check-ignore` wertet ohne
+      `--no-index` den **Index** mit aus und meldet jede getrackte Datei als „nicht
+      ignoriert" — unabhängig von den Regeln. Die Negativkontrolle aus (d) blieb damit
+      grün, weil die Kerndateien getrackt sind: sie prüfte den Tracking-Status statt
+      der Regel. Diese Klasse ist nicht auf `check-ignore` beschränkt; das ist nur das
+      Beispiel.
+      Alle sechs fallen beim Lesen nicht auf, nur beim Falsifizieren.
       **Und beim Falsifizieren selbst: erst prüfen, ob die Injektion gelandet ist.**
       Eine Falsifikation, die nichts injiziert hat, ist von einer Assertion, die nichts
       fängt, nicht zu unterscheiden — beide bleiben grün. Beleg: ein `sed`-Muster mit
@@ -375,6 +392,32 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   war; das war kein Flake, sondern das deterministische Ergebnis jedes Laufs (Build
   ~90 s, Job-Start sofort). Mit `needs: probe` + `always()` wartet er auf den Build und
   läuft trotzdem, wenn `probe` rot ist. *(Beobachtet, 20.08.)*
+
+- **Eine präfixbasierte `deny`-Regel schützt gegen Versehen, nicht gegen Umgehung.**
+  `Bash(git push:*)` in der Permission-Konfiguration hat acht Pushes abgelehnt und sah
+  aus wie eine Leitplanke. `true && git push origin main` beginnt nicht mit `git push`
+  und wäre vollständig durchgelaufen — acht Tage lang. Die einzige echte Sperre war,
+  dass es niemand probiert hat. Der Fall braucht **keine Umgehungsabsicht**:
+  `cd <repo> && git push` ist Gewohnheit und trifft dieselbe Lücke. Was wie eine
+  Leitplanke aussieht, ist ein Türschild, solange die Prüfung schwächer ist als die
+  Menge der Formen, die sie treffen soll. Die `main`-Grenze zieht deshalb
+  `.claude/hooks/guard-push.sh`, nicht eine Regel. *(Beobachtet, 20.08.)*
+
+- **Eine Sicherheitsprüfung darf nicht hinter einem Filter sitzen, der schwächer ist als
+  sie selbst.** Hooks kennen ein `if`-Feld mit **derselben** Präfix-Semantik wie die
+  Permission-Regeln. `"if": "Bash(git push:*)"` am Guard hätte bedeutet, dass
+  `cd /x && git push` den Hook gar nicht erst startet — **fail-open, bevor die Logik
+  läuft**. Der Guard läuft deshalb ohne `if` auf jedem Bash-Aufruf und entscheidet
+  selbst. *(Beobachtet, 20.08.)*
+
+- **`enforce_admins: false` macht Branch Protection für Admin-Credentials wirkungslos.**
+  Bis zum 20.08. galt die PR-Pflicht auf `main` für alle **außer Admins** — und die
+  Credentials auf dieser Maschine sind Admin. Ein direkter Push wäre durchgegangen; §3
+  hatte serverseitig **null** Durchsetzung. Steht jetzt auf `true`, bindet also auch
+  Chris. Die Regel dahinter ist dieselbe wie beim Cloudflare-Dashboard: **eine
+  Konfiguration, die nur in einer Weboberfläche lebt, wird nachgesehen, nicht
+  geschlussfolgert.** Ein Agent kommt nicht heran — also fragen.
+  *(Beobachtet, 20.08.)*
 
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
 
