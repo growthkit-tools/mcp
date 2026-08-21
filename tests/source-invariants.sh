@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # GrowthKit MCP — Quell-Invarianten
 #
-# Prüft die Invarianten, die AUSSCHLIESSLICH aus index.js folgen — ohne HTTP,
-# ohne laufende Instanz, ohne Workers Build.
+# Prüft die Invarianten, die AUSSCHLIESSLICH aus dem Checkout folgen — ohne HTTP,
+# ohne laufende Instanz, ohne Workers Build. Drei Gruppen: §11 (Protokoll-Versionen
+# in index.js), die Rollen-Maps, und die Repo-Hygiene (Exec-Bit, Ignore-Regeln,
+# getrackte Secrets). Der frühere Titel sagte „aus index.js" und war seit den
+# letzten beiden zu eng.
 #
 #   ./tests/source-invariants.sh            # eigenständig (unit-Job, lokal)
 #   ./tests/source-invariants.sh --nested   # aus probe.sh heraus, ohne Summenzeile
