@@ -268,9 +268,11 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
-    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Sechs
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Acht
       beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
-      Mechanismus ist jedes Mal derselbe: **Abwesenheit wird als Bestehen gelesen.**
+      Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen** —
+      und bei den letzten beiden umgekehrt: **ein roter Lauf belegt nicht, was er
+      zu belegen scheint.**
       (a) eine Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede
       Iteration über eine Liste braucht daher zusätzlich eine Prüfung, dass die Liste
       nicht leer ist; (b) in `jq` rebindet `|` das `.`, sodass `$d | contains(.)` zu
@@ -297,14 +299,29 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
       grün, weil die Kerndateien getrackt sind: sie prüfte den Tracking-Status statt
       der Regel. Diese Klasse ist nicht auf `check-ignore` beschränkt; das ist nur das
       Beispiel.
-      Alle sechs fallen beim Lesen nicht auf, nur beim Falsifizieren.
-      **Und beim Falsifizieren selbst: erst prüfen, ob die Injektion gelandet ist.**
-      Eine Falsifikation, die nichts injiziert hat, ist von einer Assertion, die nichts
-      fängt, nicht zu unterscheiden — beide bleiben grün. Beleg: ein `sed`-Muster mit
-      sechs Leerzeichen dort, wo eines steht, änderte nichts; der Lauf blieb grün und
-      sah aus wie ein Test, der den Fehler nicht fängt. Also nach dem Injizieren die
-      geänderte Zeile ausgeben, nicht auf den Ersetzungsbefehl vertrauen.
-      *(Beobachtet, 20.08.)*
+      (g) **Eine Falsifikation kann aus dem falschen Grund gelingen.** Der rote Lauf
+      muss aus **dem** Grund rot sein, für den die Assertion gebaut wurde — sonst ist
+      er dieselbe Sorte Scheinsicherheit wie ein grüner Test, der nichts prüft, nur
+      mit umgekehrtem Vorzeichen. Drei Belege an zwei Tagen: ein `sed`-Muster mit
+      sechs Leerzeichen dort, wo eines steht, injizierte **nichts** — der Lauf blieb
+      grün und sah aus wie ein Test, der den Fehler nicht fängt (#14); ein
+      `grep`-Injektionscheck traf eine **Kommentarzeile** statt des Codes, mit
+      demselben Ergebnis (#17); und die Skript-Kopie im temporären Testverzeichnis
+      war die Fassung **vor** der Änderung, sodass der neue Zweig fälschlich stumm
+      blieb (#19). Daraus zwei Handgriffe: nach dem Injizieren die geänderte Zeile
+      **ausgeben**, nicht dem Ersetzungsbefehl vertrauen — und vor dem Lauf prüfen,
+      dass der **Prüfling der ist, den man zu prüfen glaubt**.
+      (h) **Eine Prüfung, die eine Umgebungseigenschaft der Testmaschine voraussetzt,
+      ist auf einer anderen wirkungslos — und meldet grün.** Beleg: der Fall „`jq`
+      fehlt" wurde zunächst über `PATH=/usr/bin:/bin` gebaut. Lokal liegt `jq` in
+      `~/.local/bin`, der Fall war also korrekt; auf dem Runner liegt es in
+      `/usr/bin` — dort wäre `jq` weiterhin erreichbar gewesen, der Fall hätte nichts
+      geprüft, und der Lauf wäre grün gewesen. Die Lösung ist, die Eigenschaft
+      **herzustellen statt sie vorauszusetzen**: ein Verzeichnis mit genau den
+      benötigten Werkzeugen, ohne das fehlende. Verwandt mit (e), aber anderer
+      Gegenstand — dort der Checkout-Zustand, hier Werkzeugpfade.
+      Alle acht fallen beim Lesen nicht auf, nur beim Falsifizieren.
+      *(Beobachtet, 20.–21.08.)*
 19. **Tool-Schema-Änderungen nur mit Golden-Master-Update im selben Commit.** Wenn das
     Golden abweicht und du die Änderung nicht bewusst gemacht hast, ist **die Änderung der
     Bug** — nicht das Golden-File. Golden nie „reparieren", damit CI grün wird.
