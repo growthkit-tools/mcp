@@ -5,11 +5,19 @@
 # am 20.08. dreimal nur durch manuelle Aufrufe gefunden wurde: der Slug-Bug (#4),
 # der Auth-Positivfall (#9) und die Rollenfilterung.
 #
-#   GK_TOKEN=gk_view_… ./tests/authed-smoke.sh <base-url>
+#   GK_TOKEN=gk_view_… ./tests/authed-smoke.sh <base-url>   # Umgebung
+#   ./tests/authed-smoke.sh <base-url>                       # aus .gk-ci-token
 #
 # In CI: Secret GK_CI_TOKEN -> env GK_TOKEN (die Verbindung steht in ci.yml).
 # Zwei Namen mit Absicht: lokal soll man mit dem EIGENEN Token laufen können,
 # ohne ihn "CI-Token" nennen zu müssen.
+#
+# LOKAL OHNE UMGEBUNGSVARIABLE: `.gk-ci-token` im Repo-Root, nur der Token, eine
+# Zeile. Gitignored seit #18, und die Ignore-Regel wird von
+# tests/source-invariants.sh bewacht. Bewusst NICHT `.dev.vars` — die lädt
+# `wrangler dev` in die WORKER-Umgebung, wo der Token nichts zu suchen hat, und
+# sie würde die verifizierte Aussage "der lokale Golden-Weg läuft ohne
+# .dev.vars" prüfbar falsch machen.
 #
 # Kein `set -e`: alle Checks sollen laufen, damit ein Durchlauf das volle Bild zeigt.
 #
@@ -20,10 +28,15 @@
 # Umgebung des Aufrufers stimmt nicht", 3 heißt "das Ziel ist nicht benutzbar",
 # 1 heißt "beides stand, aber eine Assertion hat gehalten was sie soll".
 #
-#   exit 2  "GK_TOKEN nicht gesetzt" · jq/curl fehlt · kein Argument
-#           Das Secret fehlt, ist leer, oder heißt anders als in ci.yml. Ein
-#           fehlendes Secret expandiert in `env:` zum LEEREN STRING — es erreicht
-#           die Assertions nie. Fix: Secret anlegen/umbenennen.
+#   exit 2  Die Umgebung des Aufrufers stimmt nicht. Vier unterscheidbare
+#           Ursachen, jede mit eigener Meldung — der erste Satz sagt, welche:
+#             * weder `GK_TOKEN` gesetzt noch `.gk-ci-token` vorhanden
+#             * Token ist leer bzw. nur Leerraum — etwas ANDERES als "nicht
+#               angelegt", deshalb eigene Meldung
+#             * Token beginnt nicht mit `gk_` (meist ein mitkopiertes `Bearer `)
+#             * `jq`/`curl` fehlt, oder kein Argument
+#           Ein fehlendes Secret expandiert in `env:` zum LEEREN STRING — es
+#           erreicht die Assertions nie.
 #
 #   exit 3  "ZIEL NICHT BENUTZBAR" — server-card nicht erreichbar oder ohne
 #           transport.endpoint. Es gibt keine Fläche zum Prüfen; über das Token
@@ -65,12 +78,83 @@ if [ -z "$BASE" ]; then
 fi
 BASE="${BASE%/}"
 
+# --- Token beschaffen ---------------------------------------------------------
 # Setup-Guard, KEIN Selbst-Skip. Die Entscheidung "läuft nicht" gehört der CI,
 # nicht diesem Skript — ein still übersprungener Test ist §18a Fall (a).
-if [ -z "${GK_TOKEN:-}" ]; then
-  echo "GK_TOKEN nicht gesetzt — dieser Test braucht einen echten gk_-Token." >&2
-  echo "In CI: Repository-Secret GK_CI_TOKEN anlegen (Wert OHNE 'Bearer '-Prefix)." >&2
+#
+# Zwei Quellen, in dieser Reihenfolge: Umgebung (so laeuft CI), sonst die lokale
+# Datei .gk-ci-token im Repo-Root (so laeuft es hier, ohne pushen und warten).
+#
+# DIE GRENZE, DIE DIESEN FALLBACK TRAEGT: geprueft wird nur die FORM, nie die
+# GUELTIGKEIT. Ein Token, das `gk_` heisst und trotzdem falsch ist — abgelaufen,
+# deaktiviert, fremder Workspace, Admin statt gk_view_ — passiert hier
+# unveraendert und landet in Assertion A, wo 68 statt 30 Tools zurueckkommen.
+# Wuerde die Gueltigkeit hier geprueft, wanderte die Aussage von der Kollision in
+# die Dateipruefung, und dort waere sie schwaecher.
+#   exit 2 = "ich habe gar keinen Token bekommen"  (Herkunft egal)
+#   exit 1 = "ich hatte einen, der Server hat ihn nicht akzeptiert"
+TOKEN_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.gk-ci-token"
+
+# Trailing/leading Whitespace weg — fuer BEIDE Quellen. Ein `echo` statt `printf`
+# beim Anlegen der Datei haengt ein \n an; ein GitHub-Secret kann eines
+# mitbringen. Ungetrimmt liefe so ein Token in die 68-Kollision und saehe aus wie
+# ein FALSCHES Token statt wie ein Formatproblem — eine fuenfte Ursache unter
+# einer bestehenden Signatur, und genau die trennen wir hier.
+trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+
+TOKEN_SRC=""
+TOKEN_RAW=""
+if [ -n "$(trim "${GK_TOKEN:-}")" ]; then
+  TOKEN_RAW="${GK_TOKEN}"; TOKEN_SRC="Umgebung (GK_TOKEN)"
+elif [ -f "$TOKEN_FILE" ]; then
+  TOKEN_RAW="$(cat "$TOKEN_FILE")"; TOKEN_SRC=".gk-ci-token"
+else
+  echo "Kein Token: weder GK_TOKEN gesetzt noch $TOKEN_FILE vorhanden." >&2
+  echo "  lokal: Datei anlegen — printf '%s' 'gk_view_…' > .gk-ci-token" >&2
+  echo "  in CI: Repository-Secret GK_CI_TOKEN anlegen." >&2
   exit 2
+fi
+
+GK_TOKEN="$(trim "$TOKEN_RAW")"
+
+# Datei da, aber leer: das ist etwas ANDERES als "nicht angelegt" und bekommt
+# deshalb eine eigene Meldung. Sonst sucht man an der falschen Stelle.
+if [ -z "$GK_TOKEN" ]; then
+  echo "Token aus $TOKEN_SRC ist leer (bzw. nur Leerraum) — das ist etwas anderes als 'nicht angelegt'." >&2
+  exit 2
+fi
+
+# Formpruefung, und NUR die: das Praefix. Der haeufigste reale Fehlgriff ist ein
+# mitkopiertes 'Bearer ' aus einem curl-Aufruf — der Request liefe dann in den
+# OAuth-Zweig und lieferte 401, und die Diagnose zeigte auf den Server statt auf
+# die Datei. Vgl. AGENTS.md §15, das fuer n8n GENAU DAS GEGENTEIL vorschreibt.
+case "$GK_TOKEN" in
+  gk_*) ;;
+  *) echo "Token aus $TOKEN_SRC beginnt nicht mit 'gk_'. Steht dort ein 'Bearer '-Prefix?" >&2
+     exit 2 ;;
+esac
+
+# Herkunft melden — bei einem roten Lauf ist "welche Quelle hat gegriffen" die
+# erste Frage. Der Token selbst wird nie ausgegeben, auch nicht teilweise.
+#
+# Ob getrimmt wurde, wird bei der DATEI ueber die Bytezahl bestimmt, nicht ueber
+# den Stringvergleich: `$(cat …)` strippt abschliessende Zeilenumbrueche bereits
+# selbst, TOKEN_RAW und der getrimmte Wert waeren also identisch — und genau der
+# haeufigste Fall (jemand nimmt `echo` statt `printf`) bliebe stumm. Erst
+# aufgefallen, als der Fall getestet wurde.
+TRIMMED=0
+TOKLEN=$(printf '%s' "$GK_TOKEN" | wc -c | tr -d ' ')
+if [ "$TOKEN_SRC" = ".gk-ci-token" ]; then
+  FILELEN=$(wc -c < "$TOKEN_FILE" | tr -d ' ')
+  [ "$FILELEN" != "$TOKLEN" ] && TRIMMED=1
+else
+  [ "$TOKEN_RAW" != "$GK_TOKEN" ] && TRIMMED=1
+fi
+
+if [ "$TRIMMED" -eq 1 ]; then
+  printf 'Token aus: %s (Leerraum entfernt — beim Anlegen printf statt echo benutzen)\n' "$TOKEN_SRC"
+else
+  printf 'Token aus: %s\n' "$TOKEN_SRC"
 fi
 
 command -v jq   >/dev/null || { echo "jq fehlt"   >&2; exit 2; }
