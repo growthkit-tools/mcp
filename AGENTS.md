@@ -289,7 +289,7 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
-    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Acht
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Dreizehn
       beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
       Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen** —
       und bei den letzten beiden umgekehrt: **ein roter Lauf belegt nicht, was er
