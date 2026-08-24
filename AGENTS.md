@@ -14,7 +14,8 @@
 
 Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
 
-- **Ein hand-rolled File: `index.js`, ~4050 Zeilen.** MCP JSON-RPC manuell implementiert,
+- **Ein hand-rolled File: `index.js`, ~4200 Zeilen** *(Stand 24.08.2026)*. MCP JSON-RPC
+  manuell implementiert,
   **kein SDK**. `tools/list`, `tools/call`, `resources/list`, `resources/read`, Prompts
   und OAuth sind alle von Hand gebaut. Es gibt keine Bibliothek, die Fehler abfängt.
 - Konsumenten: Claude (Desktop/Web/Code), ChatGPT, MCP-Registries. **Regressionen brechen
@@ -460,8 +461,8 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
     `campaign_leads`-Umbau hat Suche nach Funktionsnamen zwei Write-Pfade übersehen.
     Autoritativ war `grep -rn "\.from('<table>')"` kombiniert mit `.update/.insert/.upsert`.
     *(Beobachtet.)*
-22. **`str_replace`-Hunks statt File-Rewrites.** Bei 4050 Zeilen ohne Modulschnitt ist ein
-    Full-Rewrite nicht reviewbar.
+22. **`str_replace`-Hunks statt File-Rewrites.** Bei dieser Dateigröße ohne Modulschnitt
+    ist ein Full-Rewrite nicht reviewbar.
 23. Tests liegen unter `tests/`. Änderungen dort gehören in einen **separaten Commit** mit
     Begründung im Body. Test und Fix im selben Commit ist ein Warnsignal.
 
