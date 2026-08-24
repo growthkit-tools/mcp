@@ -231,6 +231,22 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 **und** `/.well-known/mcp/server-card.json`.
 
 7. **Diese vier Werte nie zweimal hardcoden.** Die Card fällt automatisch aus der Const.
+   - **§7a — Eine abgeleitete Größe gehört an genau eine Stelle, auch in Prosa.**
+     §7 verbietet doppeltes Hardcoden von Konstanten; für Zahlen und Positionsangaben in
+     der Doku gilt dasselbe. Beleg, 24.08.: die §18a-Eröffnungszeile nannte „Acht", die
+     Schlusszeile „dreizehn" — und es waren dreizehn Fälle. Die Zahl stand zweimal und ist
+     gedriftet. `growthkit-website` und `supabase` hatten den Widerspruch **nicht**, und
+     zwar **nicht** weil sie sorgfältiger gepflegt wären, sondern weil ihre
+     Eröffnungszeile die Zahl **gar nicht nennt** — sie sind bauartbedingt immun.
+     Dasselbe gilt für Positionsangaben: „bei den letzten beiden" war richtig, als (g)/(h)
+     die letzten waren, und zeigte nach dem Anfügen von (i)–(m) auf zwei Fälle, die etwas
+     anderes sagen.
+     **Handgriff:** die Zahl **streichen statt korrigieren** — ein korrigierter Wert ist
+     heute richtig und beim nächsten Eintrag wieder falsch. Einen Fall beim **Buchstaben**
+     nennen statt bei der Position. Steht eine abgeleitete Größe unvermeidbar zweimal,
+     braucht es eine Assertion, die beide vergleicht: sonst ist es eine
+     Synchronisationspflicht, die keine Prüfliste zuverlässig abdeckt.
+     *(Beobachtet, 24.08.)*
 8. **`server.json`** (Registry-Publish): `name` / `version` / `description` müssen mit der
    Card übereinstimmen. Bei Version-Bump: (1) Const in `index.js`, (2) `server.json`,
    (3) ggf. Registry-Re-Publish.
@@ -289,11 +305,11 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
-    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Dreizehn
-      beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
-      Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen** —
-      und bei den letzten beiden umgekehrt: **ein roter Lauf belegt nicht, was er
-      zu belegen scheint.**
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Die unten
+      aufgeführten Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
+      Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen**;
+      **(g)** dreht die Richtung um: **ein roter Lauf belegt nicht, was er zu belegen
+      scheint.** *(Weder Anzahl noch Position hier wiederholen — §7a.)*
       (a) eine Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede
       Iteration über eine Liste braucht daher zusätzlich eine Prüfung, dass die Liste
       nicht leer ist; (b) in `jq` rebindet `|` das `.`, sodass `$d | contains(.)` zu
