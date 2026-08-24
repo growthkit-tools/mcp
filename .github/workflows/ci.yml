@@ -97,10 +97,24 @@ jobs:
             CTX=$(echo "$RAW" | jq -c '[.check_runs[]? | select(.name == "Workers Builds: growthkit-mcp")] | .[0] // empty')
 
             if [ -z "$CTX" ]; then
-              # Kein Check-Run = kein Build ausgeloest. Normalfall bei Commits, die nur
+              # ZWEI URSACHEN fuer eine leere Liste, und sie sehen identisch aus.
+              # Die Schleife deckt beide ab — bisher stand nur die erste hier.
+              #
+              # (1) KEIN BUILD AUSGELOEST. Normalfall bei Commits, die nur
               # Build-watch-excluded Pfade anfassen: *.md, specs/**, .claude/**,
               # .github/**, tests/**, scripts/**. Autoritativ ist die Liste im
               # Cloudflare-Dashboard — das hier ist eine Kopie und kann driften.
+              #
+              # (2) NOCH KEIN BUILD REGISTRIERT (AGENTS.md §18a m). Eine Messung vor
+              # dem Ereignis kann es nicht sehen, und die leere Antwort liest sich wie
+              # "es gibt nichts" statt "es gibt noch nichts". Beleg am 24.08.2026:
+              # `gh pr checks --watch` kehrte SOFORT mit "no checks reported" zurueck,
+              # weil die Runs nach einem update-branch noch nicht angelegt waren.
+              # Genau deshalb schliesst dieser Zweig nicht beim ERSTEN leeren Ergebnis
+              # auf "kein Build", sondern erst nach acht Runden — die Wartezeit ist
+              # nicht Grosszuegigkeit, sie ist die Trennung der beiden Faelle.
+              # Wer den Schwellwert senkt, macht (2) wieder zu (1) und bekommt einen
+              # uebersprungenen probe-Job, der nach "nichts zu tun" aussieht.
               #
               # ACHTUNG (Stand 20.08.): WANN die Excludes greifen, ist nur teilweise
               # belegt. Belegstand:
