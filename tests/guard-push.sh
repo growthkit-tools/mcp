@@ -151,6 +151,96 @@ check indirect-subcmd "$TMP/feature" deny 'git $(echo push) origin main'
 check alias-push      "$TMP/alias"   deny "git p origin whatever"
 
 # =============================================================================
+sec "C2 · Verengung 24.08. — Kommandostruktur statt Kommandotext"
+# =============================================================================
+# Sieben Fehlalarme zwischen dem 21. und 24.08., alle ohne einen einzigen Push.
+# Der Guard sah das Wort `push` im TEXT und liess danach die Zielpruefungen ueber
+# das ganze Kommando laufen. Seit der Verengung muss `push` SUBKOMMANDO sein, und
+# die Zielpruefungen sehen nur das Push-SEGMENT.
+#
+# ⚠️ Diese Gruppe ist die eine Haelfte der Abnahme. Die andere steht in B, C und
+# C3: eine Verengung, die auch die mitnimmt, hat den Guard aufgemacht statt
+# verbessert.
+
+# `push` als Fliesstext in einer Commit-Message. Frueher am Refspec-`:`-Zweig
+# gescheitert, weil "feat:" einen Doppelpunkt enthaelt.
+check text-not-cmd "$TMP/feature" allow 'git commit -m "feat: push notification handler"'
+check text-not-cmd "$TMP/feature" allow 'git commit -m "docs: erklaert warum git push abgelehnt wird"'
+
+# Substitution IN einer Commit-Message ist ein Wert, kein ausgefuehrtes Kommando.
+check text-not-cmd "$TMP/feature" allow 'git commit -m "fix: $(date) und push"'
+
+# Heredoc: der Rumpf ist Text, der wie ein Kommando aussieht.
+#
+# ⚠️ EHRLICH GELESEN: dieser Fall besteht NICHT, weil Heredoc-Rueempfe
+# ausgeschlossen wuerden — sie werden es nicht (das hiesse Begrenzer parsen, und
+# ein falsch erkannter Begrenzer verschluckt einen ECHTEN Push nach dem Heredoc).
+# Er besteht, weil das Fixture auf einem Feature-Branch steht und der Rumpf
+# keinen geschuetzten Branch nennt. Auf `main` oder mit `origin main` im Rumpf
+# wird weiterhin abgelehnt — siehe den Gegenfall in C3.
+check heredoc-body "$TMP/feature" allow 'cat > x.sh <<EOF
+git push origin lovable
+EOF'
+
+# Ein echter Push, aber der geschuetzte Name steht in einem ANDEREN Segment.
+# Das ist der Fall, den "push muss Subkommando sein" allein NICHT loest: hier IST
+# push das Subkommando. Erst die Segment-Isolierung macht `origin/main` in der
+# Checkout-Basis unsichtbar.
+check segment-isolation "$TMP/feature" allow 'git checkout -b tmp/x origin/main && git push origin tmp/x'
+check segment-isolation "$TMP/feature" allow 'git fetch origin main && git push origin feature/x'
+check segment-isolation "$TMP/feature" allow 'git log origin/main..HEAD && git push'
+
+# =============================================================================
+sec "C3 · Was die Verengung NICHT mitnehmen darf"
+# =============================================================================
+# Erfolgsfaelle, keine Fehlerfaelle. Wer sie beim naechsten Aufraeumen
+# "mitrepariert", hat den Guard geoeffnet.
+
+# Ausfuehrende Indirektion: der Segmentierer sieht in die Zeichenkette nicht
+# hinein. `bash -c "git push origin main"` hat als erstes Wort `bash` — fuer eine
+# reine Subkommando-Erkennung also kein Push, und trotzdem landet er auf main.
+#
+# ⚠️ Genau dieses Loch hat die erste Fassung der Verengung aufgerissen; gefangen
+# hat es der bestehende Fall [indirect-push] in C. Deshalb steht hier eine
+# ausdrueckliche Erinnerung daneben.
+check exec-indirection "$TMP/feature" deny 'eval "git push origin main"'
+check exec-indirection "$TMP/feature" deny 'echo x | xargs -I{} git push origin main'
+
+# Der geschuetzte Name steht IM Push-Segment — Isolierung darf ihn nicht
+# unsichtbar machen.
+check segment-isolation "$TMP/feature" deny 'git status && git push origin main'
+check segment-isolation "$TMP/feature" deny 'git add -A; git push origin main'
+
+# Heredoc-Gegenfall: nennt der Rumpf einen geschuetzten Branch, wird abgelehnt.
+# Das belegt, dass der Rumpf NICHT ausgeschlossen ist — die Grenze aus dem
+# Guard-Kopf, hier als Testfall statt als Behauptung.
+check heredoc-body "$TMP/feature" deny 'cat > x.sh <<EOF
+git push origin main
+EOF'
+
+# B-Faelle: Push ins Nachbar-Repo. Der Guard kann das Ziel nicht bestimmen und
+# lehnt zu Recht ab — er wuerde sonst symbolic-ref und PROTECTED des FALSCHEN
+# Repos pruefen und mit gruenem Ergebnis danebenliegen. Beantwortet wird das
+# organisatorisch (AGENTS.md: ein CC-Lauf, ein Repo), nicht technisch.
+check neighbour-repo "$TMP/feature" deny "cd $TMP/onmain && git push"
+check neighbour-repo "$TMP/feature" deny "git -C $TMP/onmain push"
+
+# ⚠️ BEWUSST BEIBEHALTENER FEHLALARM, kein Versehen.
+#
+# `git push origin feature/x` von `main` aus geht NICHT nach main — das Ziel ist
+# explizit genannt. Der Guard lehnt trotzdem ab, weil die HEAD-Pruefung am Ende
+# auch dann laeuft, wenn ein explizites, unverdaechtiges Ziel dasteht.
+#
+# Das bleibt so. Die HEAD-Pruefung faengt den haeufigsten echten Unfall — den
+# blanken `git push` von main —, und eine Ausnahme fuer explizite Ziele kostet
+# mehr, als der seltene Fall wert ist. Der Ausweg ist trivial: erst auf den
+# Feature-Branch wechseln, dann pushen.
+#
+# Der Fall steht hier, damit eine spaetere Lockerung ROT wird und eine
+# Entscheidung erzwingt, statt als Aufraeumen durchzugehen.
+check head-protected-strict "$TMP/onmain" deny "git push origin feature/x"
+
+# =============================================================================
 sec "D · Ablehnungen — aus dem Repo-Zustand"
 # =============================================================================
 check branch-protected "$TMP/onmain" deny "git push"
