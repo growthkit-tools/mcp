@@ -670,3 +670,51 @@ Vorher-Dump.
   `resources/read`-Card-HTML, serverseitig verifiziert — macht einen gefälschten direkten
   `place_call` unmöglich. Absichtlich zurückgestellt; nur bei konkretem Compliance- oder
   Trust-Center-Bedarf bauen. Die aktuelle App-Private-Lösung erfüllt UWG § 7 bereits.
+
+---
+
+## Abgleich mit den Nachbar-Repos
+
+Die drei `AGENTS.md` (`mcp`, `supabase`, `growthkit-website`) werden **nicht** automatisch
+synchron gehalten; was hier entsteht, muss von Hand hinüber und umgekehrt. Dieser Abschnitt
+ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rückstand beim
+`enforce_admins`-Notausgang stand seit dem 24.08. in supabase' Offen-Tabelle als
+„**`mcp`: fehlt**" und war **von hier aus unsichtbar**.
+
+**Erledigt** — jeder Eintrag in den Nachbardateien per Auge bestätigt, nicht per Muster:
+
+| Gegenstand | Ursprung | Stand |
+|---|---|---|
+| §18a **(j)**, **(k)**, **(l)** | `growthkit-website` | hier PR #21 · `supabase` PR #15 |
+| §18a **(m)** | strittig, s. u. | in allen drei |
+| Exec-Bit-Assertion liest `ls-tree HEAD` | `growthkit-website` | in allen drei `tests/source-invariants.sh` |
+| Guard-Verengung (`seg_is_push` / `PUSH_SEGS`) | `growthkit-website` PR #8 | hier PR #23 · `supabase` PR #16 |
+| §7a | **hier** (PR #23) | `supabase` PR #19 · `growthkit-website` PR #9 |
+| §7a-Ausnahme-Absatz | `growthkit-website` | **dieser PR** · in `supabase` |
+| Notausgang `enforce_admins` | `growthkit-website` | **dieser PR** · in `supabase` |
+
+**Offen: derzeit nichts.** Das ist ein Messergebnis vom 24.08.2026, kein Dauerzustand.
+
+⚠️ **Widersprüchliche Herkunft von §18a (m).** `supabase` führt sich selbst als Ursprung
+(„hier"), `growthkit-website` führt `mcp` („hierher übernommen"). Beide können nicht
+stimmen. Die Commit-Zeitstempel entscheiden es nicht: `supabase` 11:23:55, `mcp` 11:24:30
+— 35 Sekunden auseinander, also parallel entstanden, während `growthkit-website` erst um
+15:28 nachzog. **Nicht aufgelöst, sondern notiert.** Wer es auflöst, korrigiert die
+falsche der beiden Tabellen; eine erfundene Herkunft wäre schlechter als eine offene.
+
+⚠️ **Ein Grep über drei Repos misst drei Formatierungen, nicht eine.** Am 24.08. hat
+dieselbe Prüfung dreimal falsch gemeldet, jedes Mal in Richtung „fehlt":
+
+- `(m)` steht hier als `(m) **`, in beiden Nachbarn als `**(m)` — ein Muster für die eine
+  Schreibweise findet die andere nicht.
+- `(m)` galt beim Guard-Transfer als in `growthkit-website` fehlend. Es **wurde dort
+  am selben Tag nachgetragen**; der Befund war richtig und ist es nicht mehr geblieben.
+  **Ein Abgleich-Eintrag ist ein Messwert mit Datum, keine Eigenschaft.**
+- Der Workflow-Token-Handgriff sah hier einzigartig aus, weil hier `-c credential.helper=`
+  steht und in `supabase` `git config --local --add … ''`. **Gleiche Einsicht, andere
+  Mechanik** — ein Muster auf die Mechanik misst nicht die Einsicht.
+
+Ein Eintrag gehört hierher, sobald eine Klasse, eine Assertion oder eine Regel entsteht,
+die **nicht repo-spezifisch** ist. Der Golden-Master-Scope etwa gehört **nicht** hierher:
+es gibt nur hier einen. Ein Eintrag verschwindet erst, wenn er in **beiden** anderen Repos
+steht — **nachgesehen, nicht angenommen.**
