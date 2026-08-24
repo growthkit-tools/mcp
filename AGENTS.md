@@ -246,6 +246,18 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
      nennen statt bei der Position. Steht eine abgeleitete Größe unvermeidbar zweimal,
      braucht es eine Assertion, die beide vergleicht: sonst ist es eine
      Synchronisationspflicht, die keine Prüfliste zuverlässig abdeckt.
+
+     ⚠️ **Nicht betroffen sind datierte Messbefunde und abgeschlossene historische
+     Mengen.** Sie driften nicht — sie **veralten**, und das Datum sagt es. Das Kriterium
+     ist nicht „Zahl oder nicht", sondern ob sie sich aus etwas anderem **ergibt**. Ohne
+     diesen Absatz liest sich §7a als Verbot aller Zahlen, und beim nächsten Aufräumen
+     fiele Richtiges. Drei Stellen in dieser Datei, die ausdrücklich **bleiben**:
+     „68 Tools für `admin`, 63 für `gk_team_`" und „30 von 68 Tools, davon 29 lesend"
+     (beide *live verifiziert, 20.08.*) sowie „12 von 87" in §18a **(k)**
+     (`growthkit-website`, 21.08.2026). Diese Zahlen ergeben sich nicht — sie wurden
+     **gemessen**.
+     Umgekehrt gilt: eine Messzahl **ohne** Datum ist keine Ausnahme, sondern der
+     Normalfall der Regel.
      *(Beobachtet, 24.08.)*
 8. **`server.json`** (Registry-Publish): `name` / `version` / `description` müssen mit der
    Card übereinstimmen. Bei Version-Bump: (1) Const in `index.js`, (2) `server.json`,
