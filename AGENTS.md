@@ -569,9 +569,76 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   Chris. Die Regel dahinter ist dieselbe wie beim Cloudflare-Dashboard: **eine
   Konfiguration, die nur in einer Weboberfläche lebt, wird nachgesehen, nicht
   geschlussfolgert.** Ein Agent kommt nicht heran — also fragen.
+  Die Kehrseite von `true` ist ein **verriegelbarer** Branch: greift die Protection
+  einmal ins Leere, kann niemand sie von innen öffnen. Der Ausweg steht unten unter
+  **„Notausgang: `enforce_admins` temporär lösen"** — dort verifiziert, nicht vermutet.
   *(Beobachtet, 20.08.)*
 
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
+
+---
+
+## Notausgang: `enforce_admins` temporär lösen
+
+`main` ist mit `enforce_admins: true` geschützt — die Regel gilt **auch für Admins** und
+damit auch für Chris (§3). Das ist gewollt und die eigentliche Härte des Schutzes. Es
+heißt aber auch: gerät die Branch Protection einmal in einen Zustand, aus dem heraus kein
+PR mehr mergebar ist, ist der Branch **verriegelt** und niemand kann ihn von innen öffnen.
+
+⚠️ **Hier ist der Fall konkret, nicht theoretisch** — er hängt an zwei Zeilen:
+
+```
+enforce_admins   true
+strict           true
+contexts         ["Probe (Preview)", "Unit & Typecheck"]
+```
+
+Diese beiden Contexts sind **wörtlich die `name:`-Werte der Jobs** in
+`.github/workflows/ci.yml` (`Unit & Typecheck`, `Probe (Preview)`). **Wer einen der beiden
+Jobs umbenennt, verriegelt `main`**: der required context berichtet nie wieder, der PR
+wird nie mergebar — und der PR, der die Umbenennung zurücknähme, ist selbst blockiert.
+Ein `required_status_check`, der nie berichtet, ist der Regelfall dieser Falle. `strict:
+true` steht ebenfalls, PRs müssen also zusätzlich auf dem Stand von `main` sein.
+
+**Kein Verriegelungsrisiko dagegen aus dem übersprungenen `probe`.** Der Job **läuft
+immer**; nur seine Steps hängen an `steps.wait.outputs.skip`. Er berichtet deshalb auch
+bei Doc-only-PRs, für die Workers Builds keinen Build erzeugt. *(Nachgesehen, 24.08.)*
+
+Der Ausweg ist zwei Kommandos weit. Sie stehen hier, damit im Ernstfall niemand unter
+Druck herumprobiert:
+
+```bash
+R=repos/growthkit-tools/mcp/branches/main/protection
+
+gh api -X DELETE $R/enforce_admins       # lösen
+gh api -X POST   $R/enforce_admins       # zurücksetzen
+gh api $R/enforce_admins --jq .enabled   # prüfen: true / false
+```
+
+⚠️ **Beide Kommandos gehören in denselben Arbeitsgang.** Kein Lösen „bis morgen", kein
+Lösen mit der Absicht, es später zurückzusetzen. Zwischen den beiden Aufrufen ist `main`
+für Admins ungeschützt, und der einzige verlässliche Zeitpunkt für das Zurücksetzen ist
+**sofort**. Wer löst, setzt im selben Befehl zurück — sonst bleibt es offen, und niemand
+merkt es, weil nichts fehlschlägt.
+
+⚠️ **Der Notausgang läuft über den `gh`-OAuth-Token, NICHT über das fine-grained PAT** in
+`~/.config/growthkit/gh-workflow-token`. Dessen `Administration`-Recht steht seit dem
+24.08.2026 auf **Read** — damit scheitert der `DELETE`, und zwar an einer Stelle, an der
+gerade niemand Zeit zum Debuggen hat. Also **kein `GH_TOKEN=…`-Präfix** vor diesen
+Kommandos; das PAT ist für Pushes auf `.github/workflows/*` da, nicht hierfür.
+
+**Verifiziert am 24.08.2026 in diesem Repo**, Rundweg in einem Arbeitsgang:
+`true → false → true`. Entscheidend war der **vollständige** Vorher-/Nachher-Dump der
+Protection, nicht nur `enforce_admins`: der Diff ist **leer**. `DELETE` auf diesem
+Unterpfad rührt also weder `required_status_checks` noch `strict` noch die beiden
+Contexts an — was hier mehr zählt als in den Nachbar-Repos, weil hier mehr daran hängt.
+Ein ungeprüftes Notfallkommando ist kein Notausgang, sondern eine Vermutung.
+
+⚠️ **Vor dem `DELETE` das Wiederherstellungs-Kommando bereitlegen, nicht danach.** Räumt
+`DELETE` wider Erwarten mehr ab, ist `main` bereits beschädigt — Melden reicht dann nicht.
+Bereitliegen muss ein `PATCH` auf `$R/required_status_checks` mit `strict: true` und
+beiden Contexts, ersatzweise ein `PUT` auf `$R` mit der gesamten Konfiguration aus dem
+Vorher-Dump.
 
 ---
 
