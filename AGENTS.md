@@ -174,6 +174,18 @@ CI:              .github/workflows/ci.yml — testet und probt NUR, deployt nie
 **Kein Docker im Code-Server verfügbar** und nichts hier braucht welches. Wenn du auf ein
 Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
 
+### Push, der `.github/workflows/**` anfasst, braucht einen Umweg
+
+**Für dieses Repo am 24.08. nachgesehen, nicht übernommen:** das Remote ist inzwischen
+**HTTPS** (früher SSH), `~/.gitconfig` bindet `gh auth git-credential` an
+`https://github.com`, und der `gh`-Token trägt `admin:public_key, gist, read:org, repo` —
+**kein `workflow`**. Ein blanker `git push` greift immer zuerst auf ihn zu und scheitert,
+sobald der Commit eine Workflow-Datei anfasst.
+
+Es braucht das fine-grained PAT **und** einen leeren `-c credential.helper=` als **ersten**
+Eintrag, der die geerbte Helper-Liste zurücksetzt. Ohne den leeren Eintrag ist git fertig,
+bevor der eigene Helper drankommt — **und die Fehlermeldung nennt den Grund nicht.**
+
 ---
 
 ## Leitplanken (nicht verhandelbar)
@@ -190,6 +202,15 @@ Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
    - Push auf `main`: **nie**
    - PR öffnen: erlaubt
    - PR mergen: **nie** — Mensch approved
+   - **Ein CC-Lauf arbeitet in genau einem Repo.** Pushes in Nachbar-Repos lehnt
+     `.claude/hooks/guard-push.sh` ab und tut das zu Recht: er prüft `symbolic-ref` und
+     `PROTECTED` **des Repos, in dem er läuft**. Bei einem Push woanders hin wäre das die
+     falsche Prüfung mit grünem Ergebnis.
+     ⚠️ Ein `--git-dir`-Umweg **liefe durch** und wäre genau diese Scheinsicherheit — er
+     ist keine Lösung, sondern die Umgehung.
+     Für Arbeit in mehreren Repos: **pro Repo ein eigener Lauf.** Die Alternative — der
+     Mensch als Push-Knopf — war am 24.08. zweimal nötig und ist keine Dauerlösung.
+     *(Der Guard zitiert diesen Paragraphen in seiner `cd`-Ablehnung.)*
 4. **Keine DDL, keine SQL-Migrationen, kein `apply_migration`, kein `deploy_edge_function`.**
    Schema-Änderungen gehören ins `supabase`-Repo und brauchen einen Menschen. Wenn eine
    Änderung hier eine DB-Änderung erfordert: als Vorschlagsdatei ausgeben und stoppen.
@@ -210,6 +231,22 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 **und** `/.well-known/mcp/server-card.json`.
 
 7. **Diese vier Werte nie zweimal hardcoden.** Die Card fällt automatisch aus der Const.
+   - **§7a — Eine abgeleitete Größe gehört an genau eine Stelle, auch in Prosa.**
+     §7 verbietet doppeltes Hardcoden von Konstanten; für Zahlen und Positionsangaben in
+     der Doku gilt dasselbe. Beleg, 24.08.: die §18a-Eröffnungszeile nannte „Acht", die
+     Schlusszeile „dreizehn" — und es waren dreizehn Fälle. Die Zahl stand zweimal und ist
+     gedriftet. `growthkit-website` und `supabase` hatten den Widerspruch **nicht**, und
+     zwar **nicht** weil sie sorgfältiger gepflegt wären, sondern weil ihre
+     Eröffnungszeile die Zahl **gar nicht nennt** — sie sind bauartbedingt immun.
+     Dasselbe gilt für Positionsangaben: „bei den letzten beiden" war richtig, als (g)/(h)
+     die letzten waren, und zeigte nach dem Anfügen von (i)–(m) auf zwei Fälle, die etwas
+     anderes sagen.
+     **Handgriff:** die Zahl **streichen statt korrigieren** — ein korrigierter Wert ist
+     heute richtig und beim nächsten Eintrag wieder falsch. Einen Fall beim **Buchstaben**
+     nennen statt bei der Position. Steht eine abgeleitete Größe unvermeidbar zweimal,
+     braucht es eine Assertion, die beide vergleicht: sonst ist es eine
+     Synchronisationspflicht, die keine Prüfliste zuverlässig abdeckt.
+     *(Beobachtet, 24.08.)*
 8. **`server.json`** (Registry-Publish): `name` / `version` / `description` müssen mit der
    Card übereinstimmen. Bei Version-Bump: (1) Const in `index.js`, (2) `server.json`,
    (3) ggf. Registry-Re-Publish.
@@ -268,11 +305,11 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
-    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Acht
-      beobachtete Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
-      Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen** —
-      und bei den letzten beiden umgekehrt: **ein roter Lauf belegt nicht, was er
-      zu belegen scheint.**
+    - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Die unten
+      aufgeführten Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
+      Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen**;
+      **(g)** dreht die Richtung um: **ein roter Lauf belegt nicht, was er zu belegen
+      scheint.** *(Weder Anzahl noch Position hier wiederholen — §7a.)*
       (a) eine Prüfung „keine Verstöße" über einer leeren Liste ist immer grün — jede
       Iteration über eine Liste braucht daher zusätzlich eine Prüfung, dass die Liste
       nicht leer ist; (b) in `jq` rebindet `|` das `.`, sodass `$d | contains(.)` zu
@@ -527,6 +564,28 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 ---
 
 ## Bewusst zurückgestellt — nicht bauen
+
+- **Zielauflösung im Push-Guard.** Erwogen und **verworfen** (24.08.): der Guard könnte
+  bei `cd <pfad>` oder `git -C <pfad>` den Zielpfad auflösen, dort `symbolic-ref` lesen
+  und gegen die dort geltende Regel prüfen. Die Gründe stehen hier, damit die Idee nicht
+  in sechs Wochen als neue wiederkommt:
+  - **Die Risikorichtung.** Heute ist der Zweig ein *unbedingtes* Nein — der sicherste
+    Zustand, den es gibt. Jede Auflösungslogik ersetzt diese Gewissheit durch eine
+    Berechnung, und **jeder Fehler in dieser Berechnung ist ein stilles Ja auf einem
+    fremden `main`**.
+  - **Sie legitimiert genau den Arbeitsstil, den §3 abschafft.** Der Fall wird
+    organisatorisch beantwortet; beides zu bauen löst dasselbe Problem zweimal, und die
+    technische Lösung macht die Regel weich.
+  - **Abdeckung klein, Restfläche groß.** Von drei beobachteten Fällen wären zwei literal
+    auflösbar. Nicht abgedeckt blieben `pushd`, ein Wechsel in einer Subshell, mehrfache
+    Wechsel, Variablen im Pfad, `GIT_DIR`/`GIT_WORK_TREE` aus der Umgebung und Symlinks —
+    alle fielen ohnehin auf fail-closed zurück. Wir trügen die Komplexität **und**
+    behielten den Deny-Pfad.
+  - **Die fremde `PROTECTED`-Liste.** Den Nachbar-Guard zu parsen ist die gefährliche
+    Variante: schlägt der Parse fehl, ist das Ergebnis eine **leere** Liste — und eine
+    leere Positivliste erlaubt alles (§18a d), an der empfindlichsten Stelle des Systems.
+    Tragfähig wäre nur „`main`/`master` gelten überall als geschützt", eine Annahme, die
+    heute in allen drei Repos stimmt und dann ausgesprochen gehört.
 
 - **HMAC-Nonce-Härtung für `place_call`:** signierte Nonce, eingebettet ins
   `resources/read`-Card-HTML, serverseitig verifiziert — macht einen gefälschten direkten
