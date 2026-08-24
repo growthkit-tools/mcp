@@ -14,7 +14,8 @@
 
 Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
 
-- **Ein hand-rolled File: `index.js`, ~4050 Zeilen.** MCP JSON-RPC manuell implementiert,
+- **Ein hand-rolled File: `index.js`, ~4200 Zeilen** *(Stand 24.08.2026)*. MCP JSON-RPC
+  manuell implementiert,
   **kein SDK**. `tools/list`, `tools/call`, `resources/list`, `resources/read`, Prompts
   und OAuth sind alle von Hand gebaut. Es gibt keine Bibliothek, die Fehler abfängt.
 - Konsumenten: Claude (Desktop/Web/Code), ChatGPT, MCP-Registries. **Regressionen brechen
@@ -246,6 +247,18 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
      nennen statt bei der Position. Steht eine abgeleitete Größe unvermeidbar zweimal,
      braucht es eine Assertion, die beide vergleicht: sonst ist es eine
      Synchronisationspflicht, die keine Prüfliste zuverlässig abdeckt.
+
+     ⚠️ **Nicht betroffen sind datierte Messbefunde und abgeschlossene historische
+     Mengen.** Sie driften nicht — sie **veralten**, und das Datum sagt es. Das Kriterium
+     ist nicht „Zahl oder nicht", sondern ob sie sich aus etwas anderem **ergibt**. Ohne
+     diesen Absatz liest sich §7a als Verbot aller Zahlen, und beim nächsten Aufräumen
+     fiele Richtiges. Drei Stellen in dieser Datei, die ausdrücklich **bleiben**:
+     „68 Tools für `admin`, 63 für `gk_team_`" und „30 von 68 Tools, davon 29 lesend"
+     (beide *live verifiziert, 20.08.*) sowie „12 von 87" in §18a **(k)**
+     (`growthkit-website`, 21.08.2026). Diese Zahlen ergeben sich nicht — sie wurden
+     **gemessen**.
+     Umgekehrt gilt: eine Messzahl **ohne** Datum ist keine Ausnahme, sondern der
+     Normalfall der Regel.
      *(Beobachtet, 24.08.)*
 8. **`server.json`** (Registry-Publish): `name` / `version` / `description` müssen mit der
    Card übereinstimmen. Bei Version-Bump: (1) Const in `index.js`, (2) `server.json`,
@@ -448,8 +461,8 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
     `campaign_leads`-Umbau hat Suche nach Funktionsnamen zwei Write-Pfade übersehen.
     Autoritativ war `grep -rn "\.from('<table>')"` kombiniert mit `.update/.insert/.upsert`.
     *(Beobachtet.)*
-22. **`str_replace`-Hunks statt File-Rewrites.** Bei 4050 Zeilen ohne Modulschnitt ist ein
-    Full-Rewrite nicht reviewbar.
+22. **`str_replace`-Hunks statt File-Rewrites.** Bei dieser Dateigröße ohne Modulschnitt
+    ist ein Full-Rewrite nicht reviewbar.
 23. Tests liegen unter `tests/`. Änderungen dort gehören in einen **separaten Commit** mit
     Begründung im Body. Test und Fix im selben Commit ist ein Warnsignal.
 
@@ -557,9 +570,76 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   Chris. Die Regel dahinter ist dieselbe wie beim Cloudflare-Dashboard: **eine
   Konfiguration, die nur in einer Weboberfläche lebt, wird nachgesehen, nicht
   geschlussfolgert.** Ein Agent kommt nicht heran — also fragen.
+  Die Kehrseite von `true` ist ein **verriegelbarer** Branch: greift die Protection
+  einmal ins Leere, kann niemand sie von innen öffnen. Der Ausweg steht unten unter
+  **„Notausgang: `enforce_admins` temporär lösen"** — dort verifiziert, nicht vermutet.
   *(Beobachtet, 20.08.)*
 
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
+
+---
+
+## Notausgang: `enforce_admins` temporär lösen
+
+`main` ist mit `enforce_admins: true` geschützt — die Regel gilt **auch für Admins** und
+damit auch für Chris (§3). Das ist gewollt und die eigentliche Härte des Schutzes. Es
+heißt aber auch: gerät die Branch Protection einmal in einen Zustand, aus dem heraus kein
+PR mehr mergebar ist, ist der Branch **verriegelt** und niemand kann ihn von innen öffnen.
+
+⚠️ **Hier ist der Fall konkret, nicht theoretisch** — er hängt an zwei Zeilen:
+
+```
+enforce_admins   true
+strict           true
+contexts         ["Probe (Preview)", "Unit & Typecheck"]
+```
+
+Diese beiden Contexts sind **wörtlich die `name:`-Werte der Jobs** in
+`.github/workflows/ci.yml` (`Unit & Typecheck`, `Probe (Preview)`). **Wer einen der beiden
+Jobs umbenennt, verriegelt `main`**: der required context berichtet nie wieder, der PR
+wird nie mergebar — und der PR, der die Umbenennung zurücknähme, ist selbst blockiert.
+Ein `required_status_check`, der nie berichtet, ist der Regelfall dieser Falle. `strict:
+true` steht ebenfalls, PRs müssen also zusätzlich auf dem Stand von `main` sein.
+
+**Kein Verriegelungsrisiko dagegen aus dem übersprungenen `probe`.** Der Job **läuft
+immer**; nur seine Steps hängen an `steps.wait.outputs.skip`. Er berichtet deshalb auch
+bei Doc-only-PRs, für die Workers Builds keinen Build erzeugt. *(Nachgesehen, 24.08.)*
+
+Der Ausweg ist zwei Kommandos weit. Sie stehen hier, damit im Ernstfall niemand unter
+Druck herumprobiert:
+
+```bash
+R=repos/growthkit-tools/mcp/branches/main/protection
+
+gh api -X DELETE $R/enforce_admins       # lösen
+gh api -X POST   $R/enforce_admins       # zurücksetzen
+gh api $R/enforce_admins --jq .enabled   # prüfen: true / false
+```
+
+⚠️ **Beide Kommandos gehören in denselben Arbeitsgang.** Kein Lösen „bis morgen", kein
+Lösen mit der Absicht, es später zurückzusetzen. Zwischen den beiden Aufrufen ist `main`
+für Admins ungeschützt, und der einzige verlässliche Zeitpunkt für das Zurücksetzen ist
+**sofort**. Wer löst, setzt im selben Befehl zurück — sonst bleibt es offen, und niemand
+merkt es, weil nichts fehlschlägt.
+
+⚠️ **Der Notausgang läuft über den `gh`-OAuth-Token, NICHT über das fine-grained PAT** in
+`~/.config/growthkit/gh-workflow-token`. Dessen `Administration`-Recht steht seit dem
+24.08.2026 auf **Read** — damit scheitert der `DELETE`, und zwar an einer Stelle, an der
+gerade niemand Zeit zum Debuggen hat. Also **kein `GH_TOKEN=…`-Präfix** vor diesen
+Kommandos; das PAT ist für Pushes auf `.github/workflows/*` da, nicht hierfür.
+
+**Verifiziert am 24.08.2026 in diesem Repo**, Rundweg in einem Arbeitsgang:
+`true → false → true`. Entscheidend war der **vollständige** Vorher-/Nachher-Dump der
+Protection, nicht nur `enforce_admins`: der Diff ist **leer**. `DELETE` auf diesem
+Unterpfad rührt also weder `required_status_checks` noch `strict` noch die beiden
+Contexts an — was hier mehr zählt als in den Nachbar-Repos, weil hier mehr daran hängt.
+Ein ungeprüftes Notfallkommando ist kein Notausgang, sondern eine Vermutung.
+
+⚠️ **Vor dem `DELETE` das Wiederherstellungs-Kommando bereitlegen, nicht danach.** Räumt
+`DELETE` wider Erwarten mehr ab, ist `main` bereits beschädigt — Melden reicht dann nicht.
+Bereitliegen muss ein `PATCH` auf `$R/required_status_checks` mit `strict: true` und
+beiden Contexts, ersatzweise ein `PUT` auf `$R` mit der gesamten Konfiguration aus dem
+Vorher-Dump.
 
 ---
 
@@ -591,3 +671,51 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
   `resources/read`-Card-HTML, serverseitig verifiziert — macht einen gefälschten direkten
   `place_call` unmöglich. Absichtlich zurückgestellt; nur bei konkretem Compliance- oder
   Trust-Center-Bedarf bauen. Die aktuelle App-Private-Lösung erfüllt UWG § 7 bereits.
+
+---
+
+## Abgleich mit den Nachbar-Repos
+
+Die drei `AGENTS.md` (`mcp`, `supabase`, `growthkit-website`) werden **nicht** automatisch
+synchron gehalten; was hier entsteht, muss von Hand hinüber und umgekehrt. Dieser Abschnitt
+ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rückstand beim
+`enforce_admins`-Notausgang stand seit dem 24.08. in supabase' Offen-Tabelle als
+„**`mcp`: fehlt**" und war **von hier aus unsichtbar**.
+
+**Erledigt** — jeder Eintrag in den Nachbardateien per Auge bestätigt, nicht per Muster:
+
+| Gegenstand | Ursprung | Stand |
+|---|---|---|
+| §18a **(j)**, **(k)**, **(l)** | `growthkit-website` | hier PR #21 · `supabase` PR #15 |
+| §18a **(m)** | strittig, s. u. | in allen drei |
+| Exec-Bit-Assertion liest `ls-tree HEAD` | `growthkit-website` | in allen drei `tests/source-invariants.sh` |
+| Guard-Verengung (`seg_is_push` / `PUSH_SEGS`) | `growthkit-website` PR #8 | hier PR #23 · `supabase` PR #16 |
+| §7a | **hier** (PR #23) | `supabase` PR #19 · `growthkit-website` PR #9 |
+| §7a-Ausnahme-Absatz | `growthkit-website` | **dieser PR** · in `supabase` |
+| Notausgang `enforce_admins` | `growthkit-website` | **dieser PR** · in `supabase` |
+
+**Offen: derzeit nichts.** Das ist ein Messergebnis vom 24.08.2026, kein Dauerzustand.
+
+⚠️ **Widersprüchliche Herkunft von §18a (m).** `supabase` führt sich selbst als Ursprung
+(„hier"), `growthkit-website` führt `mcp` („hierher übernommen"). Beide können nicht
+stimmen. Die Commit-Zeitstempel entscheiden es nicht: `supabase` 11:23:55, `mcp` 11:24:30
+— 35 Sekunden auseinander, also parallel entstanden, während `growthkit-website` erst um
+15:28 nachzog. **Nicht aufgelöst, sondern notiert.** Wer es auflöst, korrigiert die
+falsche der beiden Tabellen; eine erfundene Herkunft wäre schlechter als eine offene.
+
+⚠️ **Ein Grep über drei Repos misst drei Formatierungen, nicht eine.** Am 24.08. hat
+dieselbe Prüfung dreimal falsch gemeldet, jedes Mal in Richtung „fehlt":
+
+- `(m)` steht hier als `(m) **`, in beiden Nachbarn als `**(m)` — ein Muster für die eine
+  Schreibweise findet die andere nicht.
+- `(m)` galt beim Guard-Transfer als in `growthkit-website` fehlend. Es **wurde dort
+  am selben Tag nachgetragen**; der Befund war richtig und ist es nicht mehr geblieben.
+  **Ein Abgleich-Eintrag ist ein Messwert mit Datum, keine Eigenschaft.**
+- Der Workflow-Token-Handgriff sah hier einzigartig aus, weil hier `-c credential.helper=`
+  steht und in `supabase` `git config --local --add … ''`. **Gleiche Einsicht, andere
+  Mechanik** — ein Muster auf die Mechanik misst nicht die Einsicht.
+
+Ein Eintrag gehört hierher, sobald eine Klasse, eine Assertion oder eine Regel entsteht,
+die **nicht repo-spezifisch** ist. Der Golden-Master-Scope etwa gehört **nicht** hierher:
+es gibt nur hier einen. Ein Eintrag verschwindet erst, wenn er in **beiden** anderen Repos
+steht — **nachgesehen, nicht angenommen.**
