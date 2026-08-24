@@ -199,25 +199,77 @@ else
   g(){ git -C "$REPO_ROOT" "$@"; }
 
   # --- Exec-Bit -------------------------------------------------------------
-  # Modes aus dem INDEX, nicht vom Dateisystem: dieses Repo hat
-  # core.fileMode=false, ein `chmod +x` ist für git also unsichtbar. Ein neues
-  # Testskript landet dann als 100644, und der CI-Step `./tests/x.sh` scheitert
-  # mit "Permission denied" — so geschehen bei tests/report-tools.sh (#3) und
-  # davor schon bei scripts/probe.sh, das dafür einen eigenen Commit brauchte.
-  SH_N=$(g ls-files -s -- '*.sh' | wc -l | tr -d ' ')
-  if [ "$SH_N" -eq 0 ]; then
-    ko "Kein *.sh im Index gefunden — die Exec-Bit-Prüfung liefe leer-wahr durch"
+  # ZWEI GRÜNDE für diese Prüfung, und sie sind verschieden. Beide gehören hierher.
+  #
+  # (1) Dateisystem vs. git. Dieses Repo hat core.fileMode=false, ein `chmod +x`
+  #     ist für git also unsichtbar. Ein neues Testskript landet dann als 100644,
+  #     und der CI-Step `./tests/x.sh` scheitert mit "Permission denied" — so
+  #     geschehen bei tests/report-tools.sh (#3) und davor schon bei
+  #     scripts/probe.sh, das dafür einen eigenen Commit brauchte.
+  #
+  # (2) Index vs. Commit (§18a j, zurückportiert aus growthkit-website 24.08.2026).
+  #     `git add --chmod=+x` setzt den Modus im INDEX. Die pfadbegrenzte Form
+  #     `git commit -- <pfad>` liest jedoch den ARBEITSBAUM und verwirft ihn dabei —
+  #     mit core.fileMode=false ist der Arbeitsbaum-Modus bedeutungslos, also landet
+  #     100644 im Commit, während der Index 100755 zeigt. Eine Prüfung, die nur
+  #     `ls-files` liest, ist dabei GRÜN. Ausgeliefert wird aber der Commit.
+  #     Beleg: am 21.08.2026 in growthkit-website an allen sechs Skripten passiert.
+  #
+  # Deshalb BEIDE Quellen, nicht eine statt der anderen — und ihr Auseinanderlaufen
+  # ist selbst ein Befund, kein Nebeneffekt.
+  #
+  # -F'\t': `ls-files -s` trennt den Pfad mit TAB ab. Ein Split auf Leerzeichen
+  # würde bei Pfaden mit Leerzeichen den falschen Namen melden. `ls-tree` ebenso.
+  modes_index(){ g ls-files -s -- '*.sh' | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] }' | sort; }
+  modes_head(){  g ls-tree -r HEAD      | awk -F'\t' '$2 ~ /\.sh$/ { split($1, m, " "); print $2 "\t" m[1] }' | sort; }
+
+  IDX=$(modes_index); HEADM=$(modes_head)
+  IDX_N=$(printf '%s\n' "$IDX"   | grep -c . || true)
+  HD_N=$(printf '%s\n'  "$HEADM" | grep -c . || true)
+
+  # Nicht-Leer-Guard auf BEIDEN Listen (§18a a).
+  if [ "${IDX_N:-0}" -eq 0 ] || [ "${HD_N:-0}" -eq 0 ]; then
+    ko "Keine *.sh geparst (Index=$IDX_N, HEAD=$HD_N) — die Exec-Bit-Prüfungen liefen leer-wahr durch (§18a a)"
   else
-    # -F'\t': `ls-files -s` trennt den Pfad mit TAB ab. Ein Split auf Leerzeichen
-    # würde bei Pfaden mit Leerzeichen den falschen Namen melden.
-    NOEXEC=$(g ls-files -s -- '*.sh' \
-      | awk -F'\t' '{ split($1, m, " "); if (m[1] != "100755") print $2 " (" m[1] ")" }' \
-      | tr '\n' ' ')
-    if [ -z "$NOEXEC" ]; then
-      ok "Exec-Bit: alle $SH_N *.sh im Index sind 100755"
+    # (A) Der COMMIT ist die maßgebliche Quelle — das ist, was CI auscheckt.
+    NOEXEC_HEAD=$(printf '%s\n' "$HEADM" | awk -F'\t' '$2 != "100755" { print $1 " (" $2 ")" }' | tr '\n' ' ')
+    if [ -z "$NOEXEC_HEAD" ]; then
+      ok "Exec-Bit: alle $HD_N *.sh in HEAD sind 100755"
     else
-      ko "Shell-Skript ohne Exec-Bit im Index: $NOEXEC — CI ruft sie direkt auf"
+      ko "Shell-Skript ohne Exec-Bit im COMMIT: $NOEXEC_HEAD — CI ruft sie direkt auf (§18a j)"
     fi
+
+    # (B) Der Index fängt dieselbe Regression schon vor dem Commit.
+    NOEXEC_IDX=$(printf '%s\n' "$IDX" | awk -F'\t' '$2 != "100755" { print $1 " (" $2 ")" }' | tr '\n' ' ')
+    if [ -z "$NOEXEC_IDX" ]; then
+      ok "Exec-Bit: alle $IDX_N *.sh im Index sind 100755"
+    else
+      ko "Shell-Skript ohne Exec-Bit im Index: $NOEXEC_IDX — mit 'git add --chmod=+x' nachziehen"
+    fi
+
+    # (C) Laufen die beiden auseinander, ist GENAU DAS der Befund aus §18a (j).
+    if [ "$IDX" = "$HEADM" ]; then
+      ok "Index und HEAD stimmen für alle $HD_N *.sh überein"
+    else
+      ko "Index und HEAD laufen auseinander (§18a j) — der Index sagt etwas anderes als der Commit:"
+      diff <(printf '%s\n' "$IDX") <(printf '%s\n' "$HEADM") | sed 's/^/      /'
+    fi
+  fi
+
+  # --- Symlink-Modus ----------------------------------------------------------
+  # CLAUDE.md ist ein Symlink auf AGENTS.md (Modus 120000). §18a (j) nennt ihn
+  # ausdrücklich: dieselbe Metadaten-Frage wie beim Exec-Bit, derselbe Weg führt
+  # daran vorbei. Ohne 120000 im COMMIT wäre es eine Textdatei mit dem Inhalt
+  # "AGENTS.md" — und die beiden Guide-Dateien driften wieder auseinander, wogegen
+  # der Symlink überhaupt angelegt wurde.
+  SL_HEAD=$(g ls-tree HEAD -- CLAUDE.md | awk '{print $1}')
+  SL_IDX=$(g ls-files -s -- CLAUDE.md | awk '{print $1}')
+  if [ -z "$SL_HEAD" ] || [ -z "$SL_IDX" ]; then
+    ko "CLAUDE.md nicht in HEAD oder Index gefunden (HEAD='$SL_HEAD', Index='$SL_IDX') — Symlink-Prüfung liefe leer-wahr durch (§18a c)"
+  elif [ "$SL_HEAD" = "120000" ] && [ "$SL_IDX" = "120000" ]; then
+    ok "CLAUDE.md ist in HEAD und Index ein Symlink (120000)"
+  else
+    ko "CLAUDE.md ist kein Symlink: HEAD=$SL_HEAD, Index=$SL_IDX — erwartet 120000 in beiden"
   fi
 
   # --- Ignore-Regeln, BEIDE Richtungen --------------------------------------
