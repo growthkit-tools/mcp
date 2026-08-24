@@ -320,8 +320,88 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
       **herzustellen statt sie vorauszusetzen**: ein Verzeichnis mit genau den
       benötigten Werkzeugen, ohne das fehlende. Verwandt mit (e), aber anderer
       Gegenstand — dort der Checkout-Zustand, hier Werkzeugpfade.
-      Alle acht fallen beim Lesen nicht auf, nur beim Falsifizieren.
-      *(Beobachtet, 20.–21.08.)*
+      (i) **Ein Abnahmekriterium kann den falschen Mechanismus unterstellen. Es scheitert
+      dann nicht — es passt nicht.** Die anderen acht produzieren ein falsches Signal:
+      (c) und (h) ein falsches Grün, (g) ein falsches Rot. Dieser Fall produziert **gar
+      keins**. Das Kriterium ist wohlgeformt und wäre schlüssig, *wenn* der Mechanismus
+      der unterstellte wäre; ist er es nicht, tritt weder Bestehen noch Scheitern ein.
+      Übrig bleibt eine Nicht-Beobachtung, die wie „noch nicht geprüft" aussieht — und
+      genau deshalb zur Wiederholung einlädt. **Wer wiederholt, sammelt keine Evidenz,
+      sondern dieselbe Nicht-Beobachtung.**
+      Beleg, 21.08.2026 in `supabase`: das Abnahmekriterium für einen `deny` auf ein
+      MCP-Tool lautete „ein Aufruf muss abgelehnt werden — die Ablehnung ist der Beleg".
+      Es unterstellt Ablehnung zur **Aufrufzeit**. Beobachtet wurde stattdessen, dass das
+      Tool gar nicht erst im aufrufbaren Satz erscheint; eine Ablehnung kann dann nie
+      eintreten. Zwei Anläufe an verschiedenen Tagen lieferten dieselbe Leerstelle. Der
+      Ausweg ist **nicht**, es erneut zu versuchen, sondern es umzuformulieren.
+      (j) **Index und Commit laufen auseinander — geprüft gehört der Commit.**
+      `git add --chmod=+x` setzt den Modus im **Index**. Die pfadbegrenzte Form
+      `git commit -- <pfad>` liest jedoch den **Arbeitsbaum** und verwirft ihn dabei. Mit
+      `core.fileMode = false` ist der Arbeitsbaum-Modus bedeutungslos, also landet
+      `100644` im Commit, während der Index `100755` zeigt.
+      Beleg, 21.08.2026 in `growthkit-website`: alle sechs Skripte jenes Harness waren
+      davon betroffen. Die Exec-Bit-Assertion war dabei **grün** — sie las
+      `git ls-files -s`, also den Index, und der war richtig. Ausgeliefert wird der
+      Commit. Verwandt mit (e), aber schärfer: dort ist der Arbeitsbaum in CI *immer
+      sauber*, hier ist der Index *lokal etwas anderes als HEAD*.
+      **Jede Assertion über Datei-Metadaten muss `git ls-tree HEAD` lesen, nicht nur den
+      Index.** Betrifft auch den `CLAUDE.md`-Symlink (Modus `120000`).
+      (k) **Eine Positivprüfung über einer zu kleinen Grundmenge ist derselbe Fehler wie
+      über einer leeren — nur schwerer zu sehen, weil die Zahl nicht null ist.**
+      (a) fängt den Fall „Liste leer". Nicht gefangen wird „Liste enthält 12 von 87
+      Elementen".
+      Beleg, 21.08.2026 in `growthkit-website`: die Emit-Kollisionsprüfung iterierte über
+      `"$DIST"/*.html` und sah damit nur die **12 Dateien der obersten Ebene**; die
+      übrigen 75 liegen in Unterverzeichnissen. Sie fand 10 Paare, meldete „alle 10
+      byte-identisch" und war grün — 77 Paare waren nie geprüft. Der Nicht-Leer-Guard
+      hatte gegriffen und trotzdem nichts gesagt. **Neben „ist die Menge nicht leer?"
+      gehört „ist sie so groß, wie sie sein müsste?" geprüft** — gegen eine unabhängig
+      ermittelte Zahl, nicht gegen sich selbst.
+      (l) **Eine Messung am gemeinsamen Objekt zweier Ereignisse kann die Ereignisse
+      nicht unterscheiden.** Verwandt mit (k), aber eigenständig: dort ist die Grundmenge
+      zu klein, hier ist sie richtig und die **Auflösung des beobachteten Objekts**
+      falsch. Zwei Ereignisse hinterlassen ihre Spur am selben Ding, und die Spur trägt
+      kein Merkmal, das sie trennt.
+      Beleg, 23.08.2026 in `growthkit-website`: Der erste Rückmerge lief als
+      **Fast-Forward**, zwei Branches zeigen danach auf denselben Commit. Check-Runs
+      hängen aber am **SHA**, nicht am Branch. Die dort sichtbaren Einträge stammen vom
+      einen Push — und wären exakt dieselben, wenn der andere zusätzlich welche erzeugt
+      hätte. Die Frage „hat dieser Push etwas ausgelöst?" ist an diesem Objekt **nicht
+      entscheidbar**, egal wie genau man hinsieht.
+      Zwei Auswege, beide brauchen einen Schritt **vor** der Messung: an etwas messen,
+      das die unterscheidende Dimension trägt — oder einen Zustand herstellen, in dem die
+      Objekte verschieden sind.
+      ⚠️ Der praktische Teil: **die richtige Quelle steht oft in einem ANDEREN SYSTEM als
+      die falsche.** „Hat der Push einen Actions-Lauf ausgelöst?" beantwortet nicht der
+      Check-Run am Commit, sondern die **Run-Liste** (`head_branch` + `event`); „hat der
+      Push einen Preview gebaut?" nicht GitHub, sondern das **Dashboard des bauenden
+      Systems** — für dieses Repo also Cloudflare, wo Workers Builds nur Check-Runs
+      anlegt und die Deployments-API leer bleibt. Daraus die Handregel: **wenn die
+      naheliegende Quelle nicht trennen kann, ist die Frage nicht unbeantwortbar —
+      sondern am falschen Ort gestellt.**
+      (m) **Eine leere Antwort unterscheidet nicht zwischen „es gibt nichts" und „es gibt
+      noch nichts".** Eine Messung, die vor dem Ereignis stattfindet, kann es nicht sehen,
+      und das Ergebnis liest sich wie ein Negativbefund statt wie ein zu früher Blick.
+      Beleg, 24.08.2026: `gh pr checks --watch` kehrte **sofort** mit „no checks reported"
+      zurück, weil die Runs nach einem `update-branch` noch nicht angelegt waren.
+      Abgrenzung, und sie trägt die Klasse: gegen (c) fehlt die Quelle dort *dauerhaft*,
+      hier existiert sie und ist nur noch nicht befüllt; gegen (l) ist die Frage dort
+      *nie* entscheidbar, hier wird sie es durch bloßes Warten. Das macht (m)
+      **gefährlicher als beide**, weil ein Neuversuch sie scheinbar behebt — es sieht nach
+      Flakiness aus statt nach Methodenfehler, und dann sucht niemand weiter.
+      ⚠️ Der Prüfort, an dem die Klasse sofort etwas wert ist: **überall, wo auf einen
+      externen Zustand gewartet wird, gehört „ist die Liste nicht leer?" VOR „sind alle
+      grün?".** Derselbe Nicht-Leer-Guard wie in (a) und (k), nur auf eine
+      **Wartebedingung** statt auf eine Assertion angewandt.
+      **In diesem Repo gibt es genau so eine Stelle, und sie ist richtig gebaut:** der
+      `wait`-Step in `.github/workflows/ci.yml` schließt aus einer leeren Check-Run-Liste
+      **nicht sofort** auf „kein Workers Build", sondern erst nach acht Runden. Seine
+      dokumentierte Begründung nennt allerdings die Build-Watch-Excludes — nicht die
+      Race. Zwei Gründe für dieselbe Schleife; der zweite steht bisher nur hier.
+      Alle dreizehn fallen beim Lesen nicht auf, nur beim Falsifizieren.
+      *(a–h beobachtet 20.–21.08.2026 hier; i am 21.08. in `supabase`; j und k am 21.08.
+      sowie l am 23.08. in `growthkit-website`, von dort am 24.08. zurückportiert;
+      m am 24.08.)*
 19. **Tool-Schema-Änderungen nur mit Golden-Master-Update im selben Commit.** Wenn das
     Golden abweicht und du die Änderung nicht bewusst gemacht hast, ist **die Änderung der
     Bug** — nicht das Golden-File. Golden nie „reparieren", damit CI grün wird.
