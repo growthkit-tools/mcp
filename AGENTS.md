@@ -252,10 +252,13 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
      Mengen.** Sie driften nicht — sie **veralten**, und das Datum sagt es. Das Kriterium
      ist nicht „Zahl oder nicht", sondern ob sie sich aus etwas anderem **ergibt**. Ohne
      diesen Absatz liest sich §7a als Verbot aller Zahlen, und beim nächsten Aufräumen
-     fiele Richtiges. Drei Stellen in dieser Datei, die ausdrücklich **bleiben**:
+     fiele Richtiges. Stellen in dieser Datei, die ausdrücklich **bleiben** — die
+     Aufzählung ist bewusst nicht abschließend, eine Anzahl wäre hier selbst eine
+     abgeleitete Größe:
      „68 Tools für `admin`, 63 für `gk_team_`" und „30 von 68 Tools, davon 29 lesend"
      (beide *live verifiziert, 20.08.*) sowie „12 von 87" in §18a **(k)**
-     (`growthkit-website`, 21.08.2026). Diese Zahlen ergeben sich nicht — sie wurden
+     (`growthkit-website`, 21.08.2026); dazu die Belegtabelle in **§17a** und die Zählung
+     der Commit-Bodies in **§18b**. Diese Zahlen ergeben sich nicht — sie wurden
      **gemessen**.
      Umgekehrt gilt: eine Messzahl **ohne** Datum ist keine Ausnahme, sondern der
      Normalfall der Regel.
@@ -318,6 +321,12 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 18. **Kein Fix ohne reproduzierenden, vorher failenden Test.** Wenn du nicht reproduzieren
     kannst: eskalieren, nicht raten. Plausibel aussehende Änderungen an Code, der nicht der
     Verursacher war, sind die teuerste Fehlerklasse.
+    **Die Umkehrung ist die Abnahmebedingung, keine Empfehlung: jede neue Assertion muss
+    vor dem Commit absichtlich rot gefahren worden sein.** Eine Prüfung, die nie rot war,
+    ist ungeprüft, nicht grün. Dieser Satz stand bis zum 27.08.2026 in keiner Zeile dieser
+    Datei — §18a zählt seit dem 20.08. die Fehlerklassen auf, die beim Falsifizieren
+    auffallen, und **setzt die Pflicht dazu nur voraus**. Wie der rote Lauf festgehalten
+    wird, steht als **§18b**.
     - **§18a — Eine Assertion ohne roten Lauf gilt als nicht verifiziert.** Die unten
       aufgeführten Fehlerklassen produzieren grüne Tests, die nichts prüfen. Der
       Mechanismus ist meist derselbe — **Abwesenheit wird als Bestehen gelesen**;
@@ -460,11 +469,251 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
 21. **Vollständigkeitschecks per Repo-Grep, nicht per Sampling.** Beim
     `campaign_leads`-Umbau hat Suche nach Funktionsnamen zwei Write-Pfade übersehen.
     Autoritativ war `grep -rn "\.from('<table>')"` kombiniert mit `.update/.insert/.upsert`.
+    **Ein solcher Grep ist ein Messinstrument**, und ein unkalibriertes liefert eine Zahl,
+    die *aussieht* wie ein Befund. Der Handgriff dazu steht als **§17a** — die Regel, an
+    der er hängt, ist diese hier, nicht die gleichnamige Nummer 17.
     *(Beobachtet.)*
 22. **`str_replace`-Hunks statt File-Rewrites.** Bei dieser Dateigröße ohne Modulschnitt
     ist ein Full-Rewrite nicht reviewbar.
 23. Tests liegen unter `tests/`. Änderungen dort gehören in einen **separaten Commit** mit
     Begründung im Body. Test und Fix im selben Commit ist ein Warnsignal.
+
+### §17a — Der bekannte Treffer: jede Messung braucht einen Fall, dessen Ergebnis vorher feststeht.
+
+*(Übernommen aus `growthkit-website`, 27.08.2026. Der Name bleibt `§17a`, damit Verweise über
+alle Repos hinweg gültig bleiben — wie bei `§7a` und `§18a`. **Er hängt hier an einer anderen
+Regel:** dort ist §17 „jede Zählung ist eine Messung", hier ist 17 die
+`chrome-extension`-Leseregel. Zuständig ist **Leitplanke 21**. Eigener Abschnitt statt
+eingerücktem Unterpunkt wie §7a/§18a, weil Tabelle und Codeblöcke auf einer Listenebene nicht
+lesbar sind.)*
+
+**Ein kaputtes Instrument und ein echter Negativbefund liefern dieselbe Ausgabe.** „0
+Treffer" ist ohne einen vorher benannten Treffer nicht von „es gibt nichts" zu
+unterscheiden — und die Null liest sich wie ein Befund, weil sie eine Zahl ist.
+
+Das ist kein weiterer §18a-Fall, sondern ein Schritt **davor**. §18a fragt, ob eine
+**Assertion** je rot war. §17a fragt, ob die **Messung** überhaupt messen kann. Eine
+Assertion ohne roten Lauf ist *unverifiziert*; eine Messung ohne bekannten Treffer ist
+*unbrauchbar* — und gefährlicher, weil sie ein Ergebnis ausgibt, das man weiterverwendet.
+
+**Der Handgriff, vier Schritte:**
+
+1. **Vor** dem Zählen einen Fall benennen, der im Ergebnis **auftauchen muss** — und ihn
+   hinschreiben, nicht nur denken.
+2. Messen.
+3. **Fehlt der bekannte Treffer, ist das Instrument kaputt.** Nicht berichten. Reparieren,
+   neu messen.
+4. Gibt es keinen Fall mit vorher bekanntem Ergebnis, gehört **das** in den Bericht — statt
+   einer Zahl, die so aussieht, als sei sie geprüft.
+
+⚠️ **Der bekannte Treffer muss unabhängig vom Instrument sein.** Wer die Erwartung aus
+demselben `grep` ableitet, mit dem er misst, hat nichts kalibriert, sondern das Instrument
+mit sich selbst verglichen.
+
+⚠️ **Die Plausibilität der Zahl ist kein Ersatz.** Fast alle Belege unten sahen plausibel
+aus. Aufgefallen sind sie an einer Unstimmigkeit, die es auch nicht hätte geben müssen —
+„0 von 68" bei einer Seite, von der bekannt war, dass sie funktioniert.
+
+**Belege, 26.–27.08.2026, alle in `growthkit-website`** — sechs Fälle aus zwei Tagen:
+
+| Instrument | Ausgabe, die wie ein Befund aussah | tatsächlich |
+|---|---|---|
+| `grep hreflang` case-sensitiv | „0 von 68 Seiten tragen hreflang" | react-helmet schreibt `hrefLang`; alle 68 korrekt |
+| Chunk-Suche nur über die Eager-Chunks | „`gk_src` in keinem Chunk" | im lazy geladenen `signup-cta`-Chunk. **Zweimal aufgetreten**, an beiden Enden desselben PR |
+| zsh-Schleifenvariable `path` | „33 von 33 Abweichungen" | `path` ist an `PATH` gebunden; `curl` war nach der ersten Zeile nicht mehr auffindbar |
+| Marker-`grep` über deutsche Prosa | „`tsconfig-scopes`: 0 Belege" | die Musterliste war zu eng |
+| `awk` mit Kommentarpuffer | „alle 17 Suiten: 0 Inline-Belege" | der Puffer wurde an der `if`-Zeile geleert, bevor das `ok` kam |
+| `grep gk_notrack` im aufrufenden Modul | „FEHLT" | die Funktion ist im *definierenden* Modul; der Aufrufer trägt nur den Call |
+
+Drei davon lohnen die Ausführung:
+
+**(a) Die zsh-Variable ist der klarste Fall, weil das Instrument sich selbst zerstört hat.**
+Eine Prüfschleife las Pfade in die Variable `path`. In zsh ist `path` an `PATH` gebunden —
+mit der ersten gelesenen Zeile war `PATH` überschrieben und `curl` nicht mehr auffindbar.
+Ergebnis: 33 von 33 Richtungen „abweichend", keine davon echt. Gefangen **nur**, weil 33 von
+33 unplausibel ist. Bei drei Abweichungen hätte man am falschen Objekt gesucht, mit einem
+Ergebnis, das dort nichts erklärt hätte. Der Merkposten gilt überall, wo die Shell zsh ist,
+also auf dieser Maschine auch hier: `path`, `cdpath`, `fpath`, `manpath` sind **keine freien
+Variablennamen**.
+
+**(b) Die Chunk-Messung ist die lehrreichste, weil sie zweimal passiert ist** — an beiden
+Enden desselben Vorgangs. Gemessen wurden die Chunks, die eine HTML referenziert; das sind
+die Eager-Chunks, und der gesuchte Code lag in einem lazy nachgeladenen. Beide Male lautete
+die Schlussfolgerung „der Code ist nicht im Bundle", beide Male war er es. Der bekannte
+Treffer hätte nichts gekostet: eine Datei nennen, von der feststeht, dass ihr Inhalt drin
+sein **muss**.
+
+**(c) Der `awk`-Puffer ist der unheimlichste, weil das Ergebnis perfekt gleichmäßig war.**
+Alle 17 Suiten meldeten null Inline-Belege. Eine Null in *jeder* Zeile sieht nach einer
+Eigenschaft der Grundmenge aus, nicht nach einem Fehler im Werkzeug. Gefangen nur, weil für
+eine der 17 der Erwartungswert bekannt war — sie war am selben Tag geschrieben worden.
+
+**Zwei hiesige Fälle, beide an dieser Datei — die Klasse ist nicht importiert:**
+
+- **Der Abgleich-Abschnitt trägt einen §17a-Befund, ohne ihn so zu nennen:** „Ein Grep über
+  drei Repos misst drei Formatierungen, nicht eine." Am 24.08. hat dieselbe Prüfung dreimal
+  „fehlt" gemeldet, jedes Mal falsch. Dort steht der Befund, hier die Regel — bewusst nicht
+  beides an beiden Stellen (§7a).
+- **Bei der Erhebung zu §18b, 27.08.2026.** Gezählt werden sollte, in wie vielen
+  Commit-Bodies die Notation steht. `grep -c '^FALSIFIZIERT'` über die Commit-Bodies auf
+  `main` findet **zwei weniger** als die Zählung in §18b: `7187c66` und `13c2d12` schreiben
+  „Falsifiziert:", und case-sensitiv sieht der Grep sie nicht. Gefangen, weil `7187c66`
+  **vorher** als bekannter Treffer benannt und von Hand gelesen worden war — nicht mit
+  demselben Grep. Ohne ihn wäre die kleinere Zahl in diese Datei gegangen, und sie hätte
+  ausgesehen wie ein Befund.
+
+⚠️ Der Anwendungsbereich ist **die Untersuchung, nicht der Code**. Die meisten dieser Fälle
+sind in einer Erhebung entstanden, nicht in einer eingecheckten Assertion — sie hätten
+keinen Test rot gemacht, sondern einen Bericht falsch. Für Assertionen im Repo greift
+zusätzlich §18a; der Nicht-Leer-Guard aus §18a **(a)** ist die eingecheckte Fassung desselben
+Gedankens, und §18a **(k)** — „zu kleine Grundmenge" — ist der Chunk-Fall in Assertionsform.
+
+*(Die Fremdbelege beobachtet 26.–27.08.2026 in `growthkit-website`; die beiden hiesigen
+Fälle am 24. und 27.08. hier. Übertragen am 27.08.2026 — siehe „Abgleich".)*
+
+### §18b — Wie ein roter Lauf festgehalten wird. Die Notation.
+
+*(**Teil 1 ist hier entstanden** und stand seit dem 19.08.2026 nur in Commit-Bodies, nie in
+dieser Datei; `growthkit-website` hat ihn am 27.08. aufgeschrieben und gibt ihn damit
+zurück. **Teil 2 und Teil 3** sind dort entstanden und hier neu. Eigener Abschnitt statt
+eingerücktem Unterpunkt unter 18 — aus demselben Grund wie bei §17a.)*
+
+Die **Pflicht** steht bei Leitplanke 18: jede neue Assertion muss vor dem Commit absichtlich
+rot gefahren worden sein. Sie sagt nicht, **wie** man das festhält.
+
+**Der Beleg gehört in die Commit-Message, nicht in die PR-Beschreibung.** Die Commit-Message
+wandert mit dem Commit, übersteht Rebase und Squash und ist über `git log` auffindbar, ohne
+dass jemand GitHub befragen muss. Wie nötig das ist, zeigt `supabase`, hier nachgezählt am
+27.08.2026: **zehn Commits fassen dort `tests/` an, keiner trägt einen Body** — nur Titel
+und `Co-authored-by`, über vier Suiten hinweg. Die Falsifikationen sind, falls sie
+stattfanden, nicht mehr auffindbar.
+
+#### Teil 1 — Der Block
+
+Vorlage, wörtlich aus `993ef19` (20.08.2026):
+
+```
+FALSIFIZIERT, sechs Bruchstellen einzeln, jedes Mal mit vorheriger Pruefung ob
+die Injektion gelandet ist:
+  * chmod=-x auf report-tools.sh      -> Exec-Bit rot (100644 gemeldet)
+  * Pathspec ohne Treffer             -> Nicht-Leer-Guard rot
+  * .wrangler/ aus .gitignore         -> Positivrichtung rot
+  * `*` in .gitignore                 -> Negativkontrolle rot (4 Dateien genannt)
+  * git add -f fake-deploy.pem        -> Secret-Assertion rot
+  * Lauf ausserhalb eines Repos       -> ko, nicht stiller Skip
+Danach zurueckgesetzt: 10 gruen, 0 rot. probe.sh unveraendert bei 30 — der
+delegierte Aufruf zaehlt dort als EIN Eintrag.
+```
+
+Die Schlusszeile zu `probe.sh` ist repo-eigene Zugabe (sie hängt an der Delegationszählung
+aus „Bekannte Fallen"), kein viertes Pflichtelement. Verbindlich sind drei:
+
+1. **Was injiziert wurde** — konkret genug, dass es jemand nachbauen kann. „Fehler
+   eingebaut" ist keine Injektion, sondern eine Behauptung.
+2. **Welche Assertion rot wurde** — namentlich, nicht „der Test". Ohne das ist nicht belegt,
+   dass die Injektion vom **richtigen** Wächter gefangen wurde; ein roter Lauf aus einem
+   anderen Grund sieht genauso aus (§18a **(g)**).
+3. **Die Rückstellung mit der Zahl danach.** Sie belegt zugleich, dass kein Rest der
+   Injektion im Commit gelandet ist.
+
+**Gemessen am 27.08.2026:** die Notation steht in **acht** Commit-Bodies auf `main`, vom
+ersten Harness-Commit `13c2d12` (19.08.) bis `4b96ee1` (24.08.) — gelebte Praxis, seit es
+das Harness gibt, und trotzdem nie aufgeschrieben. Drei weitere Bodies tragen dieselben drei
+Elemente unter anderer Überschrift (`ad343a1`, `fb14903`, `5f31850`: „VERIFIZIERT, alle
+Zustände einzeln", „DIESER COMMIT IST ROT, mit Absicht: 25 gruen, 1 rot").
+
+⚠️ **Die Überschrift ist ab jetzt `FALSIFIZIERT`**, groß und am Zeilenanfang — nicht aus
+Formalismus: eine Notation, die man nicht greppen kann, wird im nächsten Repo als „fehlt"
+gemessen. Genau das ist oben in §17a passiert, und der Abgleich-Abschnitt sagt dasselbe über
+drei Schreibweisen von `(m)`.
+
+#### Teil 2 — Die Gegenprobe
+
+**Neu für dieses Repo.** Ein Lauf, der rot wird, belegt nur, dass **irgendetwas** prüft —
+erst ein Lauf, der grün bleiben **muss**, trennt einen Sensor von einer Rechtschreibprüfung.
+Sie steht als eigener Block neben der Injektionsliste; Form wörtlich aus
+`growthkit-website`, 27.08.2026:
+
+```
+GEGENPROBE, muss gruen bleiben:
+  * Reihenfolge der vier Parameter umgedreht -> 24 passed, 0 failed
+```
+
+**Warum das hier trägt.** Zwei Prüfungen dieses Repos vergleichen **Mengen**: Sektion G von
+`scripts/probe.sh` (Golden Master gegen `tools/list` — Namen, Property-Keys, `required`,
+`_meta`) und die Rollen-Map-Assertion in `tests/source-invariants.sh`
+(`toolRoleMap` ≡ `toolPermissions`). Eine Mengenvergleichs-Assertion, die nur gegen
+Verstöße gefahren wurde, kann **zu breit** sein: sie wäre bei jeder harmlosen Umformatierung
+rot. Und dann greift Leitplanke 19 genau falsch herum — dort steht „Golden nie reparieren,
+damit CI grün wird", und ein Golden, das dreimal grundlos rot war, wird beim vierten Mal
+repariert. **Die Gegenprobe ist der Schutz für Leitplanke 19, nicht Zierde.**
+
+Dass die Klasse real ist, ist drüben belegt (27.08.2026): die Gegenprobe „`href` vor
+`hreflang`" — semantisch identisches XML — machte `route-parity` rot. Nicht die Assertion
+war zu breit, sondern der Leser reihenfolgeabhängig; er meldete „de fehlt" für alle 64
+gepaarten Seiten einer vollständig korrekten Sitemap. **Ohne die Gegenprobe wäre das erst
+aufgefallen, wenn jemand die Sitemap einmal anders herum geschrieben hätte.**
+
+#### Teil 3 — Die Trefferzahl
+
+**Jede Injektion meldet, wie viele Stellen sie geändert hat. Eine Zahl unter 1 macht die
+Probe ROT.**
+
+Ohne das ist eine nicht gelandete Injektion mit grünem Lauf danach nicht von einer
+bestandenen Probe zu unterscheiden — beide sehen aus wie „geprüft".
+
+**Hier ist der Fall zweimal eingetreten und beide Male nur als Prosa festgehalten worden:**
+
+- `80cc064`, 20.08.2026: *„Beim ersten F3-Versuch feuerte nichts — die Injektion war nicht
+  gelandet (Regex erwartete sechs Leerzeichen, wo eines steht)."*
+- `ad343a1`, 21.08.2026: derselbe Mechanismus beim Guard-Selbsttest — der
+  `grep`-Injektionscheck traf eine **Kommentarzeile** statt des Codes. Beides steht als
+  §18a **(g)** in dieser Datei, aber als **Fehlerklasse**, nicht als Handgriff.
+
+Eine Woche später ist `growthkit-website` in dieselbe Lücke gelaufen: eine Gegenprobe suchte
+`/>`, die Sitemap schreibt ` />`. Null Treffer, Lauf grün, nichts belegt — und es war nicht
+aufgefallen, bis die Zählung eingebaut war. **Zwei Repos, dreimal dieselbe Lücke, dreimal
+nur Prosa. Deshalb ist die Trefferzahl ab jetzt Pflichtangabe.**
+
+Zwei Formen:
+
+- **Von Hand injiziert** — der Normalfall hier: nach dem Injizieren die geänderte Zeile
+  **ausgeben**, nicht dem Ersetzungsbefehl glauben (§18a **(g)**), und die Trefferzahl
+  mitnennen.
+- **Mechanisiert als Probe in einer Suite:** die Mutation gibt ihre Trefferzahl zurück, und
+  die Suite wird bei `< 1` rot statt grün. So gebaut **nur** in `growthkit-website`
+  (`tests/route-parity.sh` Abschnitt D); in diesem Repo gibt es die mechanisierte Form
+  nicht. Das ist eine Feststellung, kein Auftrag — wer sie baut, tut es als eigenen Vorgang
+  mit eigener Verifikation.
+
+#### Wann der Block durch einen Verweis ersetzt wird
+
+Bei **tabellengetriebenen Suiten** steht der Negativfall dauerhaft im Test selbst. In diesem
+Repo gibt es dafür zwei Stellen:
+
+- **`tests/guard-push.sh`, Abschnitt F — „Selbstpruefung des Tests".** Er prüft, dass die
+  Fallliste nicht leer ist, dass **alle 13 Entscheidungszweige** des Guards getroffen wurden
+  und dass **beide Ausgänge** (`allow` über `feature-push`, `deny` über `protected-named`)
+  im selben Lauf vorkamen. Ein Guard, der immer dasselbe sagt, wäre sonst von einem
+  funktionierenden nicht zu unterscheiden.
+- **`tests/source-invariants.sh`, Abschnitt „Repo-Hygiene".** Die **Negativkontrolle**
+  „diese Kerndateien dürfen NICHT ignoriert sein" steht dauerhaft neben der Positivliste,
+  samt `--no-index` — die eingecheckte Antwort auf §18a **(d)** und **(f)**.
+
+Dort tritt an die Stelle der Injektionsliste ein **Verweis auf die Stelle in der Suite**.
+Das ist die **stärkere** Form, nicht die bequemere: sie wird bei jedem Lauf neu bewiesen,
+statt einmal behauptet worden zu sein.
+
+⚠️ **Keine Ausrede.** Der Verweis gilt nur, wo der Negativfall **tatsächlich** in der Suite
+steht. „Die Suite prüft ja beide Richtungen" ohne eine benennbare Zeile ist genau die
+Behauptung, gegen die §18a gerichtet ist. Gegenbeispiel im selben Verzeichnis:
+`tests/auth-paths.sh` fährt für die Auth-Grenze **nur Negativfälle** — der Positivfall
+braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den Block
+**nicht**.
+
+*(Teil 1 hier entstanden, seit 19.08.2026 gelebte Praxis, am 27.08. aus
+`growthkit-website` zurückgeholt und aufgeschrieben. Teil 2 und 3 dort entstanden,
+27.08.2026. In `supabase` fehlt beides — siehe „Abgleich".)*
 
 ---
 
@@ -691,10 +940,25 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | Exec-Bit-Assertion liest `ls-tree HEAD` | `growthkit-website` | in allen drei `tests/source-invariants.sh` |
 | Guard-Verengung (`seg_is_push` / `PUSH_SEGS`) | `growthkit-website` PR #8 | hier PR #23 · `supabase` PR #16 |
 | §7a | **hier** (PR #23) | `supabase` PR #19 · `growthkit-website` PR #9 |
-| §7a-Ausnahme-Absatz | `growthkit-website` | **dieser PR** · in `supabase` |
-| Notausgang `enforce_admins` | `growthkit-website` | **dieser PR** · in `supabase` |
+| §7a-Ausnahme-Absatz | `growthkit-website` | hier PR #24 · in `supabase` |
+| Notausgang `enforce_admins` | `growthkit-website` | hier PR #24 · in `supabase` |
 
-**Offen: derzeit nichts.** Das ist ein Messergebnis vom 24.08.2026, kein Dauerzustand.
+**Offen — Stand 27.08.2026:**
+
+| Gegenstand | Ursprung | Stand |
+|---|---|---|
+| **§17a** (der bekannte Treffer) | `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
+| **§18b** (Falsifikations-Notation) | Teil 1 **hier**, Teil 2+3 `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
+| Falsifikations-**Pflicht** bei Leitplanke 18 | `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
+
+⚠️ **Die drei Zeilen gehören zusammen und dürfen nicht einzeln wandern.** Eine Notation ohne
+die Pflicht, die sie notiert, ist eine Formvorschrift ohne Gegenstand; das war hier bis zum
+27.08. der Fall, nur andersherum — die Fehlerklassen in §18a standen da, die Pflicht nicht.
+In `supabase` fehlt beides, nachgesehen am 27.08.
+
+⚠️ **`growthkit-website` führt §17a und §18b in seiner Offen-Tabelle noch als „nur hier".**
+Das ist seit diesem PR falsch und **hier nicht korrigierbar** — ein CC-Lauf arbeitet in genau
+einem Repo (§3). Die Gegenbuchung drüben ist ein eigener Vorgang.
 
 ⚠️ **Widersprüchliche Herkunft von §18a (m).** `supabase` führt sich selbst als Ursprung
 („hier"), `growthkit-website` führt `mcp` („hierher übernommen"). Beide können nicht
