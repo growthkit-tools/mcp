@@ -138,7 +138,12 @@ melde den Widerspruch, statt ihn still zu übergehen.
 Tool-Versionen:  package.json (exakte Versionen, kein Caret) + package-lock.json
                  Node: 24.16.0 · Deno: 2.8.0 (nicht in diesem Repo genutzt)
 Lokal starten:   npm run dev                     # wrangler dev → localhost:8787
-Tests:           npm test                        # vitest + @cloudflare/vitest-pool-workers
+Tests:           npm test → exit 1, ERWARTET, kein Gate
+                 # Es gibt keine Testdatei und gab nie eine. Diese Zeile stand hier
+                 # bis 28.08.2026 als "vitest + @cloudflare/vitest-pool-workers" und
+                 # hat damit eine Verdrahtung behauptet, die es nie gab. CI ruft
+                 # dasselbe MIT --passWithNoTests und ist deshalb grün.
+                 # Warum das so bleibt: "Bekannte Fallen".
 Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
                  # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
                  # in Sektion H mit --nested hierher. Einzige Kopie von
@@ -824,6 +829,38 @@ braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den 
   **„Notausgang: `enforce_admins` temporär lösen"** — dort verifiziert, nicht vermutet.
   *(Beobachtet, 20.08.)*
 
+- **Ein Schritt, der besteht, weil er nichts prüft.** Der `vitest`-Step im unit-Job läuft
+  mit `--passWithNoTests`, und es gibt **keine Testdatei — und gab nie eine.** (Zwei
+  git-log-Instrumente über alle Commits, beide leer; dieselben Instrumente mit `*.sh`
+  liefern Treffer, die Null ist also echt und kein kaputtes Werkzeug, §17a.) Der Schritt
+  endet auf 0 und belegt allein, dass die gepinnte Werkzeugkette startet. **Nicht für
+  Abdeckung halten.** Das Flag ist ein bewusster Platzhalter mit dokumentierter
+  Rücknahmebedingung, kein Überbleibsel — drei Folgen überraschen trotzdem einzeln:
+  - **`npm test` und CI fällen verschiedene Urteile über dieselbe Sache.** Das Script trägt
+    das Flag **nicht** und endet lokal mit **1**; CI ruft
+    `npx --no-install vitest run --passWithNoTests` und endet mit **0**. Die Divergenz
+    **bleibt und ist gewollt**: lokal soll „es gibt keine Tests" sichtbar sein, im Job soll
+    es nicht rot machen. Wer sie angleicht, macht eine der beiden Seiten unehrlich — und
+    `npm test` auf grün zu ziehen wäre die schlechtere Hälfte, weil grün dann nach
+    Abdeckung aussieht. Die exit-1 ist deshalb **kein Stopp-Signal im Sinne von
+    „Feedback"**, sondern der Normalzustand.
+  - **`@cloudflare/vitest-pool-workers` ist deklariert und unverdrahtet.** Es gab nie eine
+    `vitest.config.*`, also kein `defineWorkersConfig`, also benutzt vitest seinen
+    Default-Pool und lädt das Paket nie. `npm rebuild workerd` trägt heute entsprechend
+    nichts — `esbuild` schon, weil vitest über vite bootet. Der Kommentar dort behauptete
+    bis zum 28.08. das Gegenteil.
+  - **Der Job heißt „Unit & Typecheck" und macht weder das eine noch das andere.** Ein
+    `tsconfig.json` oder ein `tsc`-Aufruf hat in diesem Repo nie existiert. **Der Name
+    bleibt trotzdem** — er ist required status check, siehe „Notausgang". Der Widerspruch
+    ist in `ci.yml` an Ort und Stelle vermerkt, damit ihn niemand für einen Defekt hält
+    und „repariert".
+
+  Was der Job **wirklich** prüft: `bash -n` über die CI-Bash-Dateien,
+  `tests/source-invariants.sh`, `tests/guard-push.sh` — und `npm ci`, die einzige Stelle,
+  die den Install-Pfad aus §5 prüft, **bevor** Workers Builds ihn fährt. Wer den
+  vitest-Step je entfernt, muss `npm ci` stehen lassen.
+  *(Beobachtet 28.08.2026, aufgefallen bei der §17a/§18b-Übertragung.)*
+
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
 
 ---
@@ -915,6 +952,21 @@ Vorher-Dump.
     leere Positivliste erlaubt alles (§18a d), an der empfindlichsten Stelle des Systems.
     Tragfähig wäre nur „`main`/`master` gelten überall als geschützt", eine Annahme, die
     heute in allen drei Repos stimmt und dann ausgesprochen gehört.
+
+- **In-Process-Ausführung von Worker-Code.** Zurückgestellt (28.08.2026), aber hier
+  festgehalten, weil die Lücke sonst falsch benannt wird. Sie heißt **nicht** „es gibt
+  keine Unit-Tests", sondern: **nichts führt Worker-Code aus, ohne dass eine Instanz
+  läuft.** `probe.sh`, `report-tools.sh`, `auth-paths.sh` und `authed-smoke.sh` führen ihn
+  aus — aber nur gegen `wrangler dev` oder eine Preview-Version. `source-invariants.sh`
+  und Sektion H sind `grep` über die Quelle, keine Ausführung. Zwei Gründe, warum das ein
+  **eigener Vorgang** ist und nicht nebenbei erledigt wird:
+  - **`index.js` hat genau einen Export** (`export default {`); nichts auf Modulebene ist
+    importierbar. Ein Test wäre zwangsläufig ein Integrationstest des fetch-Handlers, kein
+    Unit-Test.
+  - **Er liefe gegen die echte Supabase.** Der Handler braucht `SUPABASE_URL`, `DEMO_RL`
+    (KV) und Secrets. KV kann `vitest-pool-workers` simulieren, Supabase nicht — die
+    Aufrufe gingen an die Produktionsinstanz, dasselbe Problem wie bei Preview-Versionen
+    („Probes dürfen nur lesen"). **Wer das baut, löst zuerst das, nicht die Testdatei.**
 
 - **HMAC-Nonce-Härtung für `place_call`:** signierte Nonce, eingebettet ins
   `resources/read`-Card-HTML, serverseitig verifiziert — macht einen gefälschten direkten

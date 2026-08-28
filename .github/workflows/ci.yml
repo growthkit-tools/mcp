@@ -14,6 +14,20 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # DER NAME STIMMT NICHT — UND MUSS TROTZDEM BLEIBEN.
+  # Dieser Job fuehrt weder Unit-Tests noch einen Typecheck aus. Nachgesehen am
+  # 28.08.2026, nicht vermutet: es gab NIE eine *.test.js/*.spec.ts (git log ueber
+  # alle Commits; dasselbe Instrument mit *.sh liefert Treffer, ist also nicht
+  # kaputt) und NIE ein tsconfig.json oder einen tsc-Aufruf (git log -S, leer).
+  # Was er tatsaechlich prueft: bash -n ueber die CI-Bash-Dateien, source-invariants.sh
+  # und guard-push.sh. Das ist nicht nichts — es ist nur etwas anderes als der Name.
+  #
+  # NICHT KORRIGIEREN. "Unit & Typecheck" ist zusammen mit "Probe (Preview)" ein
+  # REQUIRED STATUS CHECK auf main, bei enforce_admins: true und strict: true. Wer
+  # den Namen aendert, VERRIEGELT main: der required context berichtet nie wieder,
+  # und der PR, der die Umbenennung zuruecknaehme, ist selbst blockiert. Siehe
+  # AGENTS.md, "Notausgang: enforce_admins temporaer loesen" — dort steht genau
+  # dieser Fall als Beispiel. Der Widerspruch ist bekannt und bewusst.
   unit:
     name: Unit & Typecheck
     runs-on: ubuntu-latest
@@ -22,7 +36,8 @@ jobs:
 
       # Erster Step: kostet Millisekunden, faengt Syntaxfehler, die bash sonst
       # erst zur Laufzeit meldet — nachdem die halbe Datei schon gelaufen ist.
-      # Alle drei Bash-Dateien, auf die CI sich stuetzt.
+      # Alle Bash-Dateien, auf die CI sich stuetzt. Keine Anzahl hier — sie stand
+      # frueher als "drei" und war laengst sechs (AGENTS.md §7a).
       - name: Bash-Syntax
         run: |
           bash -n scripts/probe.sh
@@ -53,16 +68,40 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      # NICHT MIT ENTFERNEN, falls der vitest-Step darunter je wegfaellt. Dieser
+      # Schritt haengt heute nur deshalb hier, weil vitest ihn braucht — sein Wert
+      # ist davon unabhaengig: er ist die EINZIGE Stelle, die den Install-Pfad aus
+      # AGENTS.md §5 prueft, BEVOR Workers Builds ihn faehrt. Dort laeuft
+      # `npm clean-install` gegen dasselbe package-lock.json. Bricht das Lockfile
+      # oder eine gepinnte Version, faellt es hier auf — sonst erst im
+      # Production-Deploy, den diese Action nach §2 nicht anfassen darf.
       - run: npm ci
 
       # Cloudflares Build-Umgebung blockiert postinstall-Scripts (npm 10.9 allow-scripts).
-      # workerd ist die Runtime, in der vitest-pool-workers die Tests ausfuehrt;
-      # ohne die Binary laeuft kein einziger Test.
+      # esbuild TRAEGT: vitest bootet ueber vite, das die Binary braucht.
+      # WORKERD TRAEGT HEUTE NICHT. Die frueher hier stehende Begruendung —
+      # "workerd ist die Runtime, in der vitest-pool-workers die Tests ausfuehrt" —
+      # setzt eine Verdrahtung voraus, die es in diesem Repo NIE gab: es existiert
+      # keine vitest.config.* (und hat nie eine existiert), also kein
+      # defineWorkersConfig, also benutzt vitest seinen Default-Pool.
+      # @cloudflare/vitest-pool-workers steht in den devDependencies und wird nie
+      # geladen. workerd steht hier auf Vorrat fuer den Tag, an dem der Pool
+      # verdrahtet wird — nicht fuer heute.
       - run: npm rebuild workerd esbuild
 
-      # --passWithNoTests: solange tests/ keine *.test.js enthaelt, soll das nicht
-      # rot sein. ENTFERNEN, sobald der erste echte Test existiert — sonst maskiert
-      # das Flag spaeter eine kaputte Test-Discovery.
+      # HEUTIGER ZUSTAND, damit ihn niemand fuer Abdeckung haelt: es gibt keine
+      # einzige Testdatei, und es gab nie eine. DIESER SCHRITT BESTEHT, WEIL ER
+      # NICHTS PRUEFT — vitest findet nichts und endet mit --passWithNoTests auf 0.
+      # Belegt bleibt allein, dass die gepinnte Werkzeugkette ueberhaupt startet.
+      #
+      # --passWithNoTests ist ein bewusster Platzhalter, kein Ueberbleibsel:
+      # ENTFERNEN, sobald der erste echte Test existiert — sonst maskiert das Flag
+      # spaeter eine kaputte Test-Discovery.
+      #
+      # `npm test` traegt das Flag NICHT und endet lokal mit 1. Die Divergenz ist
+      # gewollt und dokumentiert: lokal soll "es gibt keine Tests" sichtbar sein,
+      # hier soll es den Job nicht rot machen. Siehe AGENTS.md, Werkzeuge-Block
+      # und "Bekannte Fallen".
       - run: npx --no-install vitest run --passWithNoTests
 
   # ---------------------------------------------------------------------------
