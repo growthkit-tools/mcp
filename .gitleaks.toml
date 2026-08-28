@@ -1,0 +1,106 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# gitleaks — Konfiguration
+#
+# ERGAENZT die Secret-Assertion in tests/source-invariants.sh, ERSETZT sie NICHT.
+# Die dortige Pruefung liest die PFADFORM (`\.pem$|(^|/)\.env|dev\.vars|\.key$`)
+# und kann per Konstruktion nicht sehen, was IN einer legitim getrackten Datei
+# steht. Umgekehrt faende sie eine getrackte `key.pem` auch dann, wenn gitleaks
+# ihren Inhalt nicht als Muster erkennt. Zwei Verfahren, zwei Luecken.
+#
+# ⚠️ WARUM AUSGERECHNET HIER. Dies ist das einzige OEFFENTLICHE Repo im Verbund.
+# Ein Wert, der hier in einen Commit geraet, ist weltweit lesbar, bevor ihn
+# jemand bemerkt — und gilt ab diesem Moment als kompromittiert, unabhaengig
+# davon, ob er im Checkout noch liegt.
+#
+# ⚠️ GITHUB PUSH PROTECTION IST AKTIV UND REICHT NICHT. Sie greift erst beim
+# PUSH, der Wert steht dann schon in einem lokalen Commit; und ihr Regelsatz ist
+# enger. Nachgemessen am 28.08.2026: ein echter `gk_view_…`-Token wird vom
+# gitleaks-STANDARDsatz NICHT gefunden (0 Funde), erst die Regel unten findet
+# ihn (1 Fund). Was der Standardsatz nicht kennt, kennt GitHub auch nicht.
+#
+# DREI EBENEN, absteigend nach Verbindlichkeit:
+#   1. .github/workflows/ci.yml — das GATE. Fail-closed, required status check.
+#   2. .githooks/pre-commit     — die fruehe Warnung. Nur wo installiert.
+#   3. GitHub Push Protection   — das Netz danach, mit engerem Regelsatz.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[extend]
+useDefault = true
+
+[[rules]]
+# GrowthKit-API-Token.
+#
+# ⚠️ DIESE REGEL IST HIER KEINE KOSMETIK, sondern der einzige Fund-Pfad.
+# Am 28.08.2026 gegen die echte, lokal liegende `.gk-ci-token` gemessen:
+#
+#   nur Standardregeln          -> no leaks found
+#   Standardregeln + diese      -> leaks found: 1
+#
+# In supabase faengt `generic-api-key` wenigstens den Testwert zufaellig mit;
+# der echte Token dieses Repos faellt durch. Ohne diese Regel gaebe es fuer die
+# Zeichenkette, die hier die Authentifizierung IST, keinen Scanner.
+#
+# Zeichenklasse [a-f0-9] und Mindestlaenge 32 sind bewusst: Platzhalter in
+# Grossbuchstaben und kurze Testwerte fallen nicht hinein und brauchen keine
+# Allowlist-Zeile. Aus supabase uebernommen, hier gegen den echten Token
+# nachgemessen statt abgeschrieben.
+id = "growthkit-api-token"
+description = "GrowthKit API-Token (gk_…)"
+regex = '''\bgk_(?:view|edit|admin)?_?[a-f0-9]{32,64}\b'''
+tags = ["growthkit", "token"]
+
+[allowlist]
+description = "Begruendete Ausnahmen. Jede Zeile nennt, WARUM sie kein Geheimnis ist."
+
+# ⚠️ ALLE VIER EINTRAEGE BETREFFEN AUSSCHLIESSLICH UNGETRACKTE, GITIGNORIERTE
+# PFADE. In CI existiert keiner von ihnen — actions/checkout legt nur getrackte
+# Dateien an. Sie stehen hier NUR, damit derselbe Befehl, den CI faehrt, auch
+# lokal (`--no-git --source .`) benutzbar bleibt. Ohne sie waere er dauerhaft
+# rot, und nach dem dritten Fehlalarm schaltet ihn jemand ab — genau das, was
+# das Feedback-Kapitel verbietet ("Rot = Stopp. Nicht umgehen").
+#
+# Der Erstscan am 28.08.2026 belegt, dass die Liste vollstaendig und nicht
+# groesser als noetig ist:
+#   getrackter Checkout   479 635 B gescannt -> 0 Funde
+#   Historie, alle Refs   79 von 80 Commits  -> 0 Funde  (der 80. ist leer)
+#   lokal, mit Ignorierten                   -> 2 Funde, beide unten benannt
+paths = [
+  # Abhaengigkeiten. Ein Fund hier waere ein Fund im fremden Paket, nicht in
+  # diesem Repo — behoben wird er dort. Am 28.08. lieferten sie 0 Funde; der
+  # Eintrag steht gegen den Tag, an dem eine Abhaengigkeit einen Testkey
+  # mitbringt und den lokalen Lauf dauerhaft rot faerbt.
+  '''^node_modules/''',
+  # Lokaler wrangler-Zustand (KV-Simulation, Caches). Entsteht bei `npm run dev`.
+  '''^\.wrangler/''',
+
+  # ⚠️ DIE BEIDEN ECHTEN FUNDE VOM 28.08.2026. Beide ungetrackt und in
+  # .gitignore (Z. 12/13 bzw. Z. 31), beide lokal vorhanden:
+  #
+  #   gk-mcp-key.pem   -> Regel `private-key`
+  #   .gk-ci-token     -> Regel `growthkit-api-token` (siehe oben)
+  #
+  # DASS DAS KEIN LOCH REISST, ist fuer BEIDE einzeln nachgemessen — und die
+  # Antwort ist fuer beide eine ANDERE, deshalb steht sie hier zweimal:
+  #
+  #   *.pem faengt tests/source-invariants.sh ueber TRACKED_SECRETS
+  #         (`\.pem$`) — der Fall "jemand trackt sie trotzdem" wird rot.
+  #
+  #   .gk-ci-token faengt dasselbe Muster NICHT. Es wurde am 28.08. eigens
+  #         erweitert; ohne diese Erweiterung haette der Pfad-Eintrag hier den
+  #         echten Token vor gitleaks versteckt, waehrend die Pfadform-Assertion
+  #         gruen danebensteht. In supabase/growthkit-website gibt es diesen
+  #         Fall nicht, weil deren SECRET_RE ihre ausgenommene Datei ohnehin
+  #         trifft. Uebernehmen ohne Nachmessen haette hier ein Loch erzeugt.
+  #
+  # Faellt einer der beiden je aus .gitignore, gehoert sein Eintrag hier weg.
+  '''^gk-mcp-key\.pem$''',
+  '''^\.gk-ci-token$''',
+]
+
+# ⚠️ KEINE WERT-AUSNAHMEN, und das ist ein Messergebnis, kein Weglassen.
+# Weder der getrackte Checkout noch die Historie enthalten einen Fund, der
+# ausgenommen werden muesste. Kommt je einer dazu, gehoert er HIER hin und
+# nicht in `paths`: eine Datei als Pfad auszunehmen verstecke jeden kuenftigen
+# ECHTEN Key in derselben Datei. Ausgenommen wird der WERT, mit dem Nachweis
+# als Kommentar daneben.
+regexes = []

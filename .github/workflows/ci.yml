@@ -32,7 +32,13 @@ jobs:
     name: Unit & Typecheck
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 — gebraucht vom gitleaks-BEREICHS-Scan weiter unten, der
+      # origin/main..HEAD liest. Mit der Standardtiefe 1 gaebe es keinen
+      # merge-base und der Schritt waere nicht durchfuehrbar. Kostet bei 80
+      # Commits nichts Messbares.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Erster Step: kostet Millisekunden, faengt Syntaxfehler, die bash sonst
       # erst zur Laufzeit meldet — nachdem die halbe Datei schon gelaufen ist.
@@ -62,6 +68,164 @@ jobs:
       # selbst mit, haengt also nicht daran, welchen Branch actions/checkout
       # gerade ausgecheckt hat (push-Event: Branch, pull_request: detached HEAD).
       - run: bash tests/guard-push.sh
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # SECRET-SCAN. Ergaenzt die Pfadform-Assertion in source-invariants.sh
+      # (die liest NAMEN und sieht nicht in Dateien hinein), ersetzt sie nicht.
+      #
+      # ⚠️ WARUM HIER MEHR ALS NEBENAN. Dies ist das einzige OEFFENTLICHE Repo.
+      # GitHub Push Protection ist aktiv, deckt aber weniger ab, als es
+      # aussieht: sie greift erst beim Push, und ihr Regelsatz ist enger als der
+      # von gitleaks. Am 28.08.2026 gemessen: der echte `gk_view_…`-Token dieses
+      # Repos wird vom gitleaks-STANDARDsatz nicht gefunden — erst von der
+      # eigenen Regel in .gitleaks.toml. Was der Standardsatz nicht kennt, kennt
+      # GitHub auch nicht.
+      #
+      # Version gepinnt: eine wandernde Scanner-Version aendert die Fundmenge,
+      # ohne dass jemand etwas committet haette.
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: gitleaks installieren
+        run: |
+          set -euo pipefail
+          V=8.30.1
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # --no-git: geprueft wird der CHECKOUT. actions/checkout legt ausschliesslich
+      # getrackte Dateien an — die gitignorierten gk-mcp-key.pem und .gk-ci-token
+      # existieren hier gar nicht. Ihre Ausnahmen in .gitleaks.toml stehen nur fuer
+      # den lokalen Lauf.
+      #
+      # ⚠️ DER BYTE-GUARD IST TRAGEND (§18a a). "no leaks found" ist auch dann
+      # gruen, wenn der Scanner ueber NULL Dateien gelaufen ist — falscher
+      # --source-Pfad, leerer Checkout, eine Konfiguration, die alles ausschliesst.
+      #
+      # ⚠️ SCHWELLE HIER ANDERS ALS IN growthkit-website (dort TEXT/2), und das
+      # ist gemessen, nicht uebernommen. Erstmessung 28.08.2026:
+      #
+      #   getrackt gesamt          696 309 B
+      #   davon binaer                   0 B  =  0,0 %   (nebenan: 54,8 %)
+      #   gescannt                 479 635 B  =  0,689 x Text
+      #
+      # Die Bezugsgroesse "Text" ist hier gleich "Gesamt" — es gibt keine
+      # Binaerassets. Trotzdem liegt das Verhaeltnis bei 0,689 statt bei ~1,15
+      # wie nebenan, und der Grund ist DIREKT nachgemessen, nicht geschlossen:
+      # gitleaks' eigene Default-Allowlist ueberspringt Lockfiles und SVG. Jede
+      # dieser drei Dateien scannt einzeln als "~0 bytes":
+      #
+      #   package-lock.json                  88 917 B
+      #   mcp-directory-shim/package-lock.json  109 691 B
+      #   favicon.svg                        18 057 B
+      #                                     ────────────
+      #                                     216 665 B  = exakt die Luecke
+      #
+      # Bei TEXT/2 laege der Abstand zur Schwelle nur bei 38 %; EIN weiteres
+      # Lockfile dieser Groesse brachte den Schritt an den Rand — rot, ohne dass
+      # am Scan etwas waere. Deshalb TEXT/3: Abstand 107 %, und "gar nichts
+      # gescannt" faengt es unveraendert. Der Guard soll einen ZUSAMMENBRUCH
+      # fangen, nicht die Repo-Groesse nachverfolgen.
+      - name: gitleaks — Checkout
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT=$(gitleaks detect --no-git --source . --config .gitleaks.toml --redact --no-banner 2>&1)
+          RC=$?
+          echo "$OUT"
+
+          BYTES=$(printf '%s' "$OUT" | grep -oE 'scanned ~[0-9]+ bytes' | grep -oE '[0-9]+' | head -1)
+          # -I laesst Binaerdateien weg — dieselbe Grenze, die gitleaks zieht.
+          TEXT=$(git ls-files -z | xargs -0 grep -IlZ '' 2>/dev/null \
+                 | xargs -0 stat -c%s 2>/dev/null | awk '{s+=$1} END{print s+0}')
+          echo "── gescannt: ${BYTES:-<nicht geparst>} Bytes · getrackter Text: ${TEXT} Bytes"
+
+          if [ -z "${BYTES:-}" ]; then
+            echo "::error::Byte-Zahl nicht aus der Scanner-Ausgabe geparst — Ausgabeformat geaendert? Ohne sie liefe der Guard leer-wahr durch (§18a a/c)."
+            exit 1
+          fi
+          if [ "$TEXT" -eq 0 ]; then
+            echo "::error::Keine getrackte Textdatei gefunden — der Vergleichswert waere 0 und der Guard bestuende immer (§18a a)."
+            exit 1
+          fi
+          if [ "$BYTES" -lt $((TEXT / 3)) ]; then
+            echo "::error::Nur ${BYTES} von ${TEXT} getrackten Text-Bytes gescannt — der Scan hat den Grossteil des Repos nicht gesehen."
+            exit 1
+          fi
+
+          exit $RC
+
+      # ⚠️ DER BEREICHS-SCAN — hier, weil das Repo OEFFENTLICH ist, und nur hier.
+      #
+      # Der Checkout-Scan oben sieht den ENDZUSTAND. Ein Wert, der in Commit A
+      # hinzukommt und in Commit B desselben Branches wieder verschwindet, ist
+      # fuer ihn unsichtbar — und war trotzdem ab dem Push weltweit lesbar.
+      # Genau diese Luecke schliesst kein anderer Schritt: Push Protection
+      # greift mit engerem Regelsatz, und der Pre-Commit-Hook nur dort, wo ihn
+      # jemand installiert hat.
+      #
+      # ⚠️ WARUM NICHT DIE GANZE HISTORIE. In supabase und growthkit-website
+      # steht kein Historien-Gate, weil es dort auf unveraenderlichen Altfunden
+      # dauerhaft rot stuende. HIER waere es HEUTE gruen — der Erstscan am
+      # 28.08.2026 fand ueber 79 von 80 Commits (der 80. ist leer) NULL Funde.
+      # Der Grund dagegen ist trotzdem da, nur ein anderer: ein Gate ueber die
+      # ganze Historie wuerde beim ERSTEN echten Fund dauerhaft rot — und die
+      # richtige Reaktion auf einem oeffentlichen Repo ist ROTIEREN, nicht
+      # Historie umschreiben. Rotieren macht es aber nicht wieder gruen. Ab dann
+      # blockierte es jeden PR, auch den mit der Behebung, und erzwaenge
+      # Allowlist-Eintraege, die WACHSEN statt zu schrumpfen.
+      #
+      # Der Bereich origin/main..HEAD hat dieses Problem nicht: er ist nach dem
+      # Merge leer und kann nichts aus der Vergangenheit mitschleppen.
+      - name: gitleaks — Commit-Bereich (oeffentliches Repo)
+        shell: bash
+        run: |
+          set -uo pipefail
+          BASE=$(git merge-base origin/main HEAD 2>/dev/null || true)
+          if [ -z "$BASE" ]; then
+            echo "::error::Kein merge-base zu origin/main — fetch-depth: 0 fehlt? Ohne Bereich prueft dieser Schritt nichts (§18a c)."
+            exit 1
+          fi
+
+          N=$(git rev-list --count "$BASE..HEAD")
+          # Leerer Bereich = HEAD ist in origin/main enthalten. Das ist der
+          # Normalfall auf main nach dem Merge und wird BENANNT, nicht
+          # stillschweigend uebersprungen (§18a c).
+          #
+          # ⚠️ HIER STAND EIN ZWEITER ZWEIG ("leer, obwohl HEAD nicht in main")
+          # UND IST BEIM FALSIFIZIEREN GEFLOGEN. Er liess sich nicht rot fahren,
+          # weil es den Zustand nicht gibt: `rev-list --count main..HEAD` == 0
+          # bedeutet, dass jeder von HEAD erreichbare Commit auch von main
+          # erreichbar ist — und genau das IST "HEAD ist Vorfahr". Eine
+          # Assertion, die nicht eintreten kann, ist keine, sie sieht nur so aus.
+          # Der tragende Nicht-Leer-Guard steht stattdessen unten auf der Zahl
+          # der tatsaechlich GESCANNTEN Commits.
+          if [ "$N" -eq 0 ]; then
+            echo "── HEAD ist in origin/main enthalten — kein eigener Commit-Bereich, nichts zu scannen."
+            exit 0
+          fi
+
+          # Leere Commits liefern keinen Patch und werden von gitleaks nicht
+          # gezaehlt — beim Erstscan war das genau einer von 80. Deshalb wird
+          # gegen die Zahl der NICHT-leeren Commits verglichen, nicht gegen N.
+          NONEMPTY=0
+          for c in $(git rev-list "$BASE..HEAD"); do
+            [ -n "$(git show --format= --name-only "$c")" ] && NONEMPTY=$((NONEMPTY+1))
+          done
+          echo "── Bereich ${BASE:0:8}..HEAD · ${N} Commit(s), davon ${NONEMPTY} mit Inhalt"
+
+          OUT=$(gitleaks detect --source . --log-opts="$BASE..HEAD" --config .gitleaks.toml --redact --no-banner 2>&1)
+          RC=$?
+          echo "$OUT"
+
+          SCANNED=$(printf '%s' "$OUT" | grep -oE '[0-9]+ commits scanned' | grep -oE '[0-9]+' | head -1)
+          if [ "$NONEMPTY" -gt 0 ] && [ "${SCANNED:-0}" -lt 1 ]; then
+            echo "::error::${NONEMPTY} Commit(s) mit Inhalt im Bereich, aber ${SCANNED:-0} gescannt — der Scan ist leer durchgelaufen (§18a a)."
+            exit 1
+          fi
+
+          exit $RC
 
       - uses: actions/setup-node@v4
         with:
