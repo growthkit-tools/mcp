@@ -220,8 +220,16 @@ else
   #
   # -F'\t': `ls-files -s` trennt den Pfad mit TAB ab. Ein Split auf Leerzeichen
   # würde bei Pfaden mit Leerzeichen den falschen Namen melden. `ls-tree` ebenso.
-  modes_index(){ g ls-files -s -- '*.sh' | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] }' | sort; }
-  modes_head(){  g ls-tree -r HEAD      | awk -F'\t' '$2 ~ /\.sh$/ { split($1, m, " "); print $2 "\t" m[1] }' | sort; }
+  # ⚠️ NICHT NUR *.sh. Seit 28.08.2026 auch alles unter .githooks/.
+  # .githooks/pre-commit ist ein bash-Skript OHNE ENDUNG — git verlangt genau
+  # dort das Exec-Bit, sonst fuehrt es den Hook stillschweigend nicht aus. Das
+  # ist die schlimmste Variante: kein Fehler, keine Meldung, nur ein
+  # Sicherheitsnetz, das nicht mehr da ist. Ein Muster auf '\.sh$' haette ihn
+  # nie gesehen.
+  EXEC_PATHSPEC=('*.sh' '.githooks/*')
+  EXEC_RE='\.sh$|(^| )\.githooks/'
+  modes_index(){ g ls-files -s -- "${EXEC_PATHSPEC[@]}" | awk -F'\t' '{ split($1, m, " "); print $2 "\t" m[1] }' | sort; }
+  modes_head(){  g ls-tree -r HEAD | awk -F'\t' -v re="$EXEC_RE" '$2 ~ re { split($1, m, " "); print $2 "\t" m[1] }' | sort; }
 
   IDX=$(modes_index); HEADM=$(modes_head)
   IDX_N=$(printf '%s\n' "$IDX"   | grep -c . || true)
@@ -229,12 +237,12 @@ else
 
   # Nicht-Leer-Guard auf BEIDEN Listen (§18a a).
   if [ "${IDX_N:-0}" -eq 0 ] || [ "${HD_N:-0}" -eq 0 ]; then
-    ko "Keine *.sh geparst (Index=$IDX_N, HEAD=$HD_N) — die Exec-Bit-Prüfungen liefen leer-wahr durch (§18a a)"
+    ko "Keine Skripte geparst (Index=$IDX_N, HEAD=$HD_N) — die Exec-Bit-Prüfungen liefen leer-wahr durch (§18a a)"
   else
     # (A) Der COMMIT ist die maßgebliche Quelle — das ist, was CI auscheckt.
     NOEXEC_HEAD=$(printf '%s\n' "$HEADM" | awk -F'\t' '$2 != "100755" { print $1 " (" $2 ")" }' | tr '\n' ' ')
     if [ -z "$NOEXEC_HEAD" ]; then
-      ok "Exec-Bit: alle $HD_N *.sh in HEAD sind 100755"
+      ok "Exec-Bit: alle $HD_N Skripte (*.sh + .githooks/*) in HEAD sind 100755"
     else
       ko "Shell-Skript ohne Exec-Bit im COMMIT: $NOEXEC_HEAD — CI ruft sie direkt auf (§18a j)"
     fi
@@ -242,7 +250,7 @@ else
     # (B) Der Index fängt dieselbe Regression schon vor dem Commit.
     NOEXEC_IDX=$(printf '%s\n' "$IDX" | awk -F'\t' '$2 != "100755" { print $1 " (" $2 ")" }' | tr '\n' ' ')
     if [ -z "$NOEXEC_IDX" ]; then
-      ok "Exec-Bit: alle $IDX_N *.sh im Index sind 100755"
+      ok "Exec-Bit: alle $IDX_N Skripte (*.sh + .githooks/*) im Index sind 100755"
     else
       ko "Shell-Skript ohne Exec-Bit im Index: $NOEXEC_IDX — mit 'git add --chmod=+x' nachziehen"
     fi
@@ -317,7 +325,22 @@ else
   # Die Ignore-Regeln oben sehen diesen Fall NICHT: `git add -f` geht an ihnen
   # vorbei, und einmal getrackt bleibt eine Datei getrackt. Das ist der einzige
   # Weg, auf dem ein Secret in dieses öffentliche Repo käme.
-  TRACKED_SECRETS=$(g ls-files | grep -E '\.pem$|(^|/)\.env|dev\.vars|\.key$' | tr '\n' ' ')
+  # ⚠️ `.gk-ci-token` STEHT SEIT 28.08.2026 MIT IN DIESEM MUSTER, und zwar
+  # nicht der Vollstaendigkeit halber. `.gitleaks.toml` nimmt diesen Pfad
+  # ausdruecklich von der Allowlist-Seite aus, damit der lokale `--no-git`-Lauf
+  # nicht dauerhaft rot ist. Damit ist gitleaks fuer die Datei BLIND — auch
+  # dann, wenn jemand sie trackt. Vorher fing sie hier nichts: das Muster traf
+  # `.pem`, `.env`, `dev.vars` und `.key`, aber nicht diesen Namen, und
+  # MUST_IGNORE weiter oben prueft nur, dass die Ignore-REGEL existiert — eine
+  # bereits getrackte Datei bleibt getrackt, egal was in .gitignore steht.
+  # Es gab also einen Zustand, in dem beide Verfahren gruen sind und der echte
+  # Token im Repo liegt.
+  #
+  # In supabase und growthkit-website tritt der Fall nicht auf, weil deren
+  # SECRET_RE die dort ausgenommene Datei ohnehin trifft (`(^|/)\.env`). Die
+  # Allowlist von dort zu uebernehmen, OHNE hier nachzumessen, haette genau
+  # dieses Loch erzeugt.
+  TRACKED_SECRETS=$(g ls-files | grep -E '\.pem$|(^|/)\.env|dev\.vars|\.key$|(^|/)\.gk-ci-token$' | tr '\n' ' ')
   if [ -z "$TRACKED_SECRETS" ]; then
     ok "Keine getrackte Datei sieht nach Secret aus"
   else
