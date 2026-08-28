@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# pre-commit — gitleaks ueber die GESTAGTEN Aenderungen
+#
+# AKTIVIEREN (einmal je Clone, nicht automatisch):
+#   git config core.hooksPath .githooks
+#
+# ⚠️ WARUM NICHT .git/hooks: was dort liegt, ist NICHT getrackt und ueberlebt
+# keinen Clone. Ein Sicherheitsnetz, das nur auf einer Maschine existiert, ist
+# eine Erinnerung, kein Netz. core.hooksPath zeigt auf ein getracktes
+# Verzeichnis — der Hook wandert damit mit dem Repo.
+#
+# ⚠️ WARUM NICHT .claude/hooks/: das sind CLAUDE-CODE-Hooks (PreToolUse), keine
+# git-Hooks. Sie greifen an Werkzeugaufrufen und feuern nur, wenn Claude Code
+# das Kommando ausfuehrt. Ein `git commit` im Terminal oder aus dem Editor
+# laeuft an ihnen vorbei. Zwei Mechanismen, zwei Zeitpunkte — deshalb eine
+# eigene Datei und kein Anbau an .claude/hooks/guard-push.sh.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# DIESER HOOK IST DIE FRUEHE, NICHT DIE MASSGEBLICHE EBENE.
+#
+# Massgeblich ist der gitleaks-Schritt im Unit-Job (.github/workflows/ci.yml).
+# Der ist fail-closed, laeuft auf jedem PR und haengt an einem required status
+# check auf main. Dieser Hook faengt denselben Fund frueher, hat aber zwei
+# Loecher, die er nicht schliessen kann:
+#
+#   * er laeuft nur, wo jemand core.hooksPath gesetzt hat
+#   * `git commit --no-verify` uebergeht ihn
+#
+# ⚠️ IN DIESEM REPO WIEGT DIE FRUEHE EBENE SCHWERER ALS NEBENAN. Das Repo ist
+# OEFFENTLICH: was einmal gepusht ist, war weltweit lesbar — auch wenn der
+# naechste Commit es wieder entfernt. GitHubs Push Protection greift erst beim
+# Push und mit engerem Regelsatz; sie kennt den `gk_`-Token dieses Repos nicht
+# (am 28.08.2026 gemessen, siehe .gitleaks.toml). Was dieser Hook hier abfaengt,
+# ist nie in einem Commit gewesen.
+# ─────────────────────────────────────────────────────────────────────────────
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+CFG="$ROOT/.gitleaks.toml"
+
+# ⚠️ FEHLENDE KONFIG IST EIN FEHLER, KEIN GRUND ZUM UEBERSPRINGEN (§18a c).
+# Ohne sie liefe gitleaks mit dem nackten Standardsatz — also OHNE die
+# gk_-Regel, die hier der einzige Fund-Pfad fuer den eigenen Token ist. Der
+# Lauf saehe aus wie eine Pruefung und waere blind fuer genau den Wert, der
+# hier am haeufigsten durch die Finger geht.
+if [ ! -f "$CFG" ]; then
+  printf '\033[31m✗ pre-commit: .gitleaks.toml fehlt — der Scan liefe ohne die gk_-Regel.\033[0m\n' >&2
+  printf '  Das ist ein Fehler, kein Grund zum Ueberspringen. Commit ABGEBROCHEN.\n' >&2
+  exit 1
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  # ⚠️ LAUT, ABER NICHT BLOCKIEREND — eine Entscheidung, kein Versaeumnis.
+  #
+  # Fail-closed waere hier falsch: ein frischer Clone koennte dann gar nicht
+  # committen, und gewonnen waere nichts, weil die Garantie ohnehin in CI liegt.
+  # Der Unit-Job installiert gitleaks selbst und wird rot, wenn das misslingt.
+  #
+  # Ein STILLES Ueberspringen waere §18a (c) — die Pruefung verschwaende mit
+  # ihrem Eingang. Deshalb diese Meldung auf stderr, unuebersehbar.
+  printf '\033[33m⚠ pre-commit: gitleaks nicht gefunden — Secret-Scan UEBERSPRUNGEN.\033[0m\n' >&2
+  printf '  Installieren: siehe AGENTS.md, Werkzeuge-Block (Version dort gepinnt).\n' >&2
+  printf '  Der Commit laeuft durch. Das Gate ist der Unit-Job in CI, nicht dieser Hook.\n' >&2
+  exit 0
+fi
+
+# `protect --staged` liest den INDEX, nicht den Arbeitsbaum und nicht die
+# Historie. Genau richtig fuer diesen Zeitpunkt: geprueft wird, was gleich in
+# den Commit geht. Die gitignorierten `gk-mcp-key.pem` und `.gk-ci-token`
+# tauchen hier nie auf, weil sie nie gestagt werden — deshalb braucht dieser
+# Hook ihre Pfad-Ausnahmen aus .gitleaks.toml nicht, und deshalb ist er
+# schaerfer als der lokale `--no-git`-Lauf.
+if gitleaks protect --staged --config "$CFG" --redact --no-banner; then
+  exit 0
+fi
+
+printf '\n\033[31m✗ pre-commit: gitleaks hat ein mutmassliches Secret in den gestagten Aenderungen gefunden.\033[0m\n' >&2
+printf '  Der Commit ist ABGEBROCHEN. Handgriffe, in dieser Reihenfolge:\n' >&2
+printf '    1. Wert aus der Datei entfernen und aus dem Index nehmen.\n' >&2
+printf '    2. Ist er echt: ROTIEREN. Dieses Repo ist OEFFENTLICH — ein Wert, der\n' >&2
+printf '       je in einem gepushten Commit stand, gilt als kompromittiert. Auch\n' >&2
+printf '       wenn der naechste Commit ihn entfernt: Scanner lesen mit.\n' >&2
+printf '    3. Ist er NACHWEISLICH oeffentlich: in .gitleaks.toml unter\n' >&2
+printf '       allowlist.regexes eintragen — auf den WERT, nicht auf den Pfad,\n' >&2
+printf '       und mit dem Nachweis als Kommentar daneben.\n' >&2
+printf '  Umgehen mit --no-verify ist moeglich und wird in CI trotzdem rot.\n' >&2
+exit 1
