@@ -127,6 +127,30 @@ Token/Key als Konstante hart zu setzen: **STOPP und frag** — niemals hardcoden
 Diese Datei selbst ist absichtlich eingecheckt: Konventions- und Workflow-Doku, keine
 Secrets, und öffentlich zu sein ist hier ein gutes Engineering-Signal.
 
+**Seit 28.08.2026 steht ein Scanner dahinter, nicht nur dieser Absatz.** `gitleaks` in
+drei Ebenen, absteigend nach Verbindlichkeit:
+
+| Ebene | wo | greift | Lücke |
+|---|---|---|---|
+| **Gate** | `.github/workflows/ci.yml`, unit-Job | jeder PR, fail-closed | sieht nur, was gepusht ist |
+| **Hook** | `.githooks/pre-commit` | vor dem Commit, `--staged` | nur wo `core.hooksPath` gesetzt ist; `--no-verify` übergeht ihn |
+| **Push Protection** | GitHub, serverseitig | beim Push | engerer Regelsatz, siehe unten |
+
+⚠️ **Push Protection allein reicht hier nicht, und das ist gemessen.** Sie greift erst
+beim **Push** — der Wert steht dann schon in einem lokalen Commit. Und ihr Regelsatz ist
+enger: ein echter `gk_view_…`-Token wird vom gitleaks-**Standardsatz** nicht gefunden
+(0 Funde), erst von der eigenen Regel in `.gitleaks.toml` (1 Fund). Was der Standardsatz
+nicht kennt, kennt GitHub auch nicht. Die frühere Begründung „mcp braucht keinen Hook,
+weil öffentlich" war falsch herum: **öffentlich heißt höheres Risiko, nicht geringeres.**
+
+⚠️ **Der Erstscan am 28.08.2026 war sauber — beide Hälften.** Getrackter Checkout:
+479 635 B, **0 Funde**. Historie über alle Refs: **79 von 80 Commits** (der 80. ist ein
+leerer Commit ohne Inhalt), **0 Funde**. Lokal mit den ignorierten Dateien: 2 Funde, beide
+in `gk-mcp-key.pem` und `.gk-ci-token` — ungetrackt, gitignored, nie in einem Commit.
+**Es ist also nichts zu rotieren.** Wäre etwas gefunden worden, gälte es als
+kompromittiert, auch wenn es heute nicht mehr im Checkout liegt: bei einem öffentlichen
+Repo zählt, was je in einem gepushten Commit stand.
+
 **Maßgeblich ist der Code, nicht diese Datei.** Bei Widerspruch gewinnt der Code — aber
 melde den Widerspruch, statt ihn still zu übergehen.
 
@@ -144,6 +168,12 @@ Tests:           npm test → exit 1, ERWARTET, kein Gate
                  # hat damit eine Verdrahtung behauptet, die es nie gab. CI ruft
                  # dasselbe MIT --passWithNoTests und ist deshalb grün.
                  # Warum das so bleibt: "Bekannte Fallen".
+Secret-Scan:     gitleaks 8.30.1 (in CI gepinnt, .github/workflows/ci.yml)
+                 git config core.hooksPath .githooks   # einmal je Clone, sonst
+                 # liegt .githooks/pre-commit im Repo und laeuft nie.
+                 gitleaks detect --no-git --source . --config .gitleaks.toml
+                 # derselbe Befehl, den CI faehrt. Die Pfad-Ausnahmen in der
+                 # Konfig existieren nur, damit er LOKAL nicht dauerhaft rot ist.
 Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
                  # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
                  # in Sektion H mit --nested hierher. Einzige Kopie von
@@ -1000,6 +1030,7 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | Gegenstand | Ursprung | Stand |
 |---|---|---|
 | **§17a** (der bekannte Treffer) | `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
+| Bereichs-Scan `origin/main..HEAD` | **hier** (28.08.) | nur hier — die Begründung ist „öffentliches Repo" und gilt für die Nachbarn nicht |
 | **§18b** (Falsifikations-Notation) | Teil 1 **hier**, Teil 2+3 `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
 | Falsifikations-**Pflicht** bei Leitplanke 18 | `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
 
