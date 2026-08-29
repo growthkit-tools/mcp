@@ -775,8 +775,13 @@ braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den 
 
 - `index.js` hat **keinen Modulschnitt**. Änderungen an einer Tool-Implementierung können
   Shared Helper betreffen, die andere Tools nutzen. Vor jeder Änderung: Aufrufer greppen.
-- Der Stateless-HTTP-RC (`server/discover`, kein `initialize`-Handshake) ist **additiv**
-  geplant, kein Rewrite. Bestehende Handshake-Pfade bleiben funktionsfähig.
+- Der Stateless-HTTP-Teil der MCP-Revision **2026-07-28** ist **additiv** geplant, kein
+  Rewrite: bestehende Handshake-Pfade bleiben funktionsfähig. *(Diese Zeile sagte bis zum
+  29.08.2026 „RC" — die Revision ist seit dem 28.07.2026 final.)* **Welche Methoden dafür
+  fehlen und welche noch da sind, steht als `MIGRATION_MARKERS` in
+  `tests/source-invariants.sh` und nirgends sonst** — hier stünde es als Prosa und
+  veraltete still. Die Entscheidung, wann umgebaut wird, steht unter „Bewusst
+  zurückgestellt".
 
 - **`growthkit-mcp-demo` baut aus diesem Repo, deployt aber nicht `index.js`.** Sein Root
   directory ist `/mcp-directory-shim`; ausgeliefert wird der Shim. Zwei Folgen: die
@@ -1006,6 +1011,24 @@ Vorher-Dump.
     (KV) und Secrets. KV kann `vitest-pool-workers` simulieren, Supabase nicht — die
     Aufrufe gingen an die Produktionsinstanz, dasselbe Problem wie bei Preview-Versionen
     („Probes dürfen nur lesen"). **Wer das baut, löst zuerst das, nicht die Testdatei.**
+
+- **Umbau auf die MCP-Revision 2026-07-28.** Zurückgestellt (29.08.2026), **nicht
+  vergessen**. Die Revision ist final (veröffentlicht 28.07.2026), die Mindestfrist für
+  Abkündigungen beträgt zwölf Monate, und Clients sprechen weiterhin `2025-11-25`. Es
+  drängt also nichts — und ohne die Handshake-Assertions aus PR #28 wäre der Umbau gar
+  nicht überprüfbar gewesen.
+
+  ⚠️ **Der gemessene Zustand steht NICHT hier, sondern als `MIGRATION_MARKERS` in
+  `tests/source-invariants.sh`** — und zwar absichtlich: dort ist er eine Assertion, die
+  rot wird, sobald sie nicht mehr stimmt. Eine Liste in dieser Datei wäre Prosa und
+  verrottete still. Wer wissen will, was fehlt und was noch da ist, liest die Liste; wer
+  eine Migration baut, streicht dort seinen Eintrag. **Keine zweite Kopie hier anlegen**
+  — dieselbe Regel wie bei `EXP_UI_PROTOCOL`.
+
+  Was die Liste **nicht** leistet und was deshalb ein Mensch entscheiden muss: sie prüft
+  ihre eigene Vollständigkeit gegen die Spec nicht (§18a k). Und §11 gilt unverändert —
+  es gibt **zwei** Protokollversionen mit 2026er-Datum, die ext-apps-Version und die
+  Kernrevision, und sie dürfen nie angeglichen werden.
 
 - **HMAC-Nonce-Härtung für `place_call`:** signierte Nonce, eingebettet ins
   `resources/read`-Card-HTML, serverseitig verifiziert — macht einen gefälschten direkten
