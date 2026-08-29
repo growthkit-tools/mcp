@@ -348,5 +348,95 @@ else
   fi
 fi
 
+# --- Migrationsmarker · MCP-Revision 2026-07-28 ------------------------------
+# WAS DAS IST. Ein SCHULDSCHEIN-artiger Befund über den heutigen Code, festgehalten
+# am 29.08.2026 aus einer Erhebung zur MCP-Revision 2026-07-28. Er ersetzt eine
+# Spec-Datei: was hier steht, ist mechanisch nachprüfbar und wird rot, sobald es
+# nicht mehr stimmt — eine Spec verrottet still.
+#
+# ⚠️ WARUM NICHT NUR EINE LISTE DER FEHLENDEN METHODEN. Die Vorbilder in
+# `supabase` (Marker) und `growthkit-website` (Werkzeug-Schuldschein) tragen,
+# weil sie ZWEI im Repo abgeleitete Mengen gegeneinander halten und in BEIDE
+# Richtungen rot werden. Eine reine Fehlt-Liste hat diese zweite Richtung nicht:
+# „gebaut, aber noch gelistet" ist prüfbar, „von der Revision gefordert und nie
+# gelistet" ist es nicht — dafür gäbe es im Repo keine Quelle. Deshalb steht hier
+# je Eintrag ein ERWARTETER ZUSTAND (absent/present); dann sind beide Richtungen
+# Funktionen des Checkouts und beide werden rot.
+#
+# ⚠️ WAS DIESE LISTE NICHT KANN, ausdrücklich: sie prüft nicht ihre eigene
+# VOLLSTÄNDIGKEIT gegen die Spec. Fordert 2026-07-28 etwas, das hier nie stand,
+# bleibt sie grün und ist unvollständig (§18a k — zu kleine Grundmenge). Das ist
+# die Grenze des Verfahrens, nicht ein Mangel dieser Fassung. Der Stand, gegen
+# den gemessen wurde, ist der 29.08.2026.
+#
+# ⚠️ DIE LISTE SOLL SCHRUMPFEN. Jeder absent-Eintrag ist eine offene Migration;
+# wer ihn baut, streicht ihn hier. Ein present-Eintrag verschwindet, wenn die
+# Revision das Feature streicht und der Code nachzieht. Sie darf NIE WACHSEN,
+# ohne dass jemand eine neue Erhebung dazuschreibt.
+#
+# Zielrevision 2026-07-28 (veröffentlicht 28.07.2026, Mindestfrist für
+# Abkündigungen zwölf Monate). Der Server spricht 2025-11-25 — die Konstante ist
+# oben in §11 gegen den ext-apps-Wert abgesichert und in probe.sh Sektion I gegen
+# die servierte initialize-Antwort. Beides bleibt grün, wenn jemand nur die
+# Konstante bumpt: KEIN Test prüft, ob der Server die angesagte Revision auch
+# implementiert. Genau diese Lücke ist der Grund, aus dem die Liste hier steht.
+#
+# Format je Zeile:  <grep-Muster>|<Zustand>|<Bedeutung für die Migration>
+MIGRATION_MARKERS="
+server/discover|absent|RPC ist in 2026-07-28 Pflicht; liefert supportedVersions/capabilities/serverInfo
+elicitation/create|absent|Server->Client-Request; solange keiner existiert, entfaellt MRTR
+sampling/createMessage|absent|dito
+roots/list|absent|dito
+[Mm]cp-[Ss]ession-[Ii]d|absent|kein Transport-Session-Zustand; Zustandslosigkeit kostet daher nichts
+params\.protocolVersion|absent|der Server verhandelt nicht, er nennt seine Version unbedingt
+method === \"ping\"|present|in 2026-07-28 gestrichen, hier noch vorhanden
+payload\.session_id = args\.session_id|present|Working Memory haengt an einem Tool-Argument, nicht am Transport
+"
+
+# ⚠️ GEGENSTAND IST AUSSCHLIESSLICH index.js ($SRC), NICHT das Repo. Diese Datei
+# enthaelt jedes Muster oben im Klartext; ein repo-weiter grep zaehlte seinen
+# EIGENEN Text mit und meldete jeden absent-Eintrag als "vorhanden". Die
+# Einschraenkung auf eine Datei ist deshalb tragend, nicht kosmetisch — sie ist
+# eigens falsifiziert worden.
+MM_LINES=$(printf '%s\n' "$MIGRATION_MARKERS" | grep -c '|' || true)
+MM_ABS=$(printf '%s\n' "$MIGRATION_MARKERS" | grep -c '|absent|' || true)
+MM_PRS=$(printf '%s\n' "$MIGRATION_MARKERS" | grep -c '|present|' || true)
+
+# Nicht-Leer-Guard auf der Liste UND auf beiden Richtungen (§18a a). Eine leere
+# Liste bestuende jede Pruefung; eine Richtung ohne Eintrag waere ein unbemerkt
+# toter Zweig — dieselbe Einsicht wie beim Werkzeug-Schuldschein in
+# growthkit-website ("ein Eintrag ist nicht null").
+if [ "${MM_LINES:-0}" -eq 0 ]; then
+  ko "MIGRATION_MARKERS ist leer — die Schleife liefe null Mal und waere trivial gruen (§18a a)"
+elif [ "${MM_ABS:-0}" -eq 0 ] || [ "${MM_PRS:-0}" -eq 0 ]; then
+  ko "MIGRATION_MARKERS hat keine Eintraege fuer eine der beiden Richtungen (absent=$MM_ABS, present=$MM_PRS) — ein Zweig waere unbemerkt tot (§18a a)"
+else
+  MM_BAD=""
+  MM_MALFORMED=0
+  MM_CHECKED=0
+  while IFS='|' read -r PAT WANT WHY; do
+    [ -z "$PAT" ] && continue
+    case "$WANT" in
+      absent|present) ;;
+      *) MM_MALFORMED=$((MM_MALFORMED+1)); continue ;;
+    esac
+    MM_CHECKED=$((MM_CHECKED+1))
+    if grep -qE -- "$PAT" "$SRC"; then IST="present"; else IST="absent"; fi
+    [ "$IST" = "$WANT" ] || MM_BAD="$MM_BAD $PAT(erwartet=$WANT,ist=$IST)"
+  done <<EOF
+$(printf '%s\n' "$MIGRATION_MARKERS" | grep '|')
+EOF
+
+  if [ "$MM_MALFORMED" -gt 0 ]; then
+    ko "MIGRATION_MARKERS: $MM_MALFORMED Zeile(n) ohne gueltigen Zustand — stillschweigend uebersprungen waeren sie ungeprueft (§18a c)"
+  elif [ "$MM_CHECKED" -ne "$MM_LINES" ]; then
+    ko "MIGRATION_MARKERS: $MM_CHECKED von $MM_LINES Zeilen geprueft — die Schleife hat Eintraege verloren (§18a k)"
+  elif [ -z "$MM_BAD" ]; then
+    ok "Migrationsmarker 2026-07-28: alle $MM_CHECKED Eintraege stimmen ($MM_ABS fehlen noch, $MM_PRS vorhanden)"
+  else
+    ko "Migrationsmarker 2026-07-28 veraltet:$MM_BAD — gebaut oder entfernt? Dann den Eintrag hier streichen (die Liste schrumpft, das ist der Zweck)"
+  fi
+fi
+
 [ "$NESTED" -eq 1 ] || printf '\n\033[1m%s\033[0m\n' "Ergebnis: $PASS grün, $FAIL rot"
 [ "$FAIL" -eq 0 ] || exit 1
