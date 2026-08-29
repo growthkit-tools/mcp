@@ -50,6 +50,12 @@ eq(){ # desc actual expected
 norm(){ printf '%s' "${1%/}"; }   # Trailing Slash weg: Card hat ihn, server.json nicht
 sec(){ printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+# Liest eine Modul-Level-Konstante aus index.js. EINE Implementierung, zwei
+# Aufrufer (Sektion H und I) — sonst stuenden zwei sed-Muster fuer dieselbe
+# Quelle da und koennten auseinanderlaufen. Der WERT hat weiterhin genau eine
+# Quelle: die Konstante selbst (§7).
+src_const(){ sed -n "s/^const $1 *= *\"\\([^\"]*\\)\".*/\\1/p" "$REPO_ROOT/index.js" | head -1; }
+
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # =============================================================================
@@ -231,8 +237,8 @@ sec "H · Source-Invarianten (nur lokal/CI, kein HTTP)"
 # bedeutungslos — nicht bloß ungenau.
 if [ -f "$REPO_ROOT/index.js" ]; then
 
-  SRC_VER=$(sed   -n 's/^const SERVER_VERSION *= *"\([^"]*\)".*/\1/p'   "$REPO_ROOT/index.js" | head -1)
-  SRC_PROTO=$(sed -n 's/^const PROTOCOL_VERSION *= *"\([^"]*\)".*/\1/p' "$REPO_ROOT/index.js" | head -1)
+  SRC_VER=$(src_const SERVER_VERSION)
+  SRC_PROTO=$(src_const PROTOCOL_VERSION)
 
   eq "SERVER_VERSION (Source) == Card"   "$SRC_VER"   "$CARD_VER"
   eq "PROTOCOL_VERSION (Source) == Card" "$SRC_PROTO" "$CARD_PROTO"
@@ -250,6 +256,118 @@ if bash "$REPO_ROOT/tests/source-invariants.sh" --nested; then
   ok "Quell-Invarianten (tests/source-invariants.sh)"
 else
   ko "Quell-Invarianten (tests/source-invariants.sh) — Details in den Zeilen darüber"
+fi
+
+# =============================================================================
+sec "I · Handshake (AGENTS.md §7 · §11)"
+# =============================================================================
+# WARUM ES DIESE SEKTION GIBT. §7 nennt vier Werte mit EINER Quelle und sagt,
+# dass ZWEI Flaechen sie lesen: die server-card UND die initialize-Response.
+# Geprueft wurde bis zum 29.08.2026 nur die Card (Sektion B/H). Die
+# initialize-Antwort war ungeprueft: tests/auth-paths.sh stellt fest, dass
+# protocolVersion vorhanden und nicht null ist, und DRUCKT den Wert — verglichen
+# hat ihn nichts. Fuer capabilities, serverInfo und ping gab es in keiner der
+# vier Suiten eine Assertion.
+#
+# WARUM HIER UND NICHT IN auth-paths.sh. Diese Assertions vergleichen den
+# CHECKOUT gegen die servierte Flaeche und gelten nur, wenn beide Seiten aus
+# demselben Commit stammen — dieselbe Bauart wie B, G und H. auth-paths.sh liest
+# den Checkout ueberhaupt nicht: es bekommt nur eine base-url, und sein
+# Gegenstand ist die Auth-Grenze (welcher Aufloesungsweg, bleiben die
+# oeffentlichen Pfade offen). Der Handshake gehoert nicht dorthin.
+# tests/source-invariants.sh scheidet aus dem umgekehrten Grund aus: es macht
+# per Konstruktion kein HTTP.
+#
+# ANGEHAENGT statt eingeschoben: die Sektionsbuchstaben sind an sechs Stellen in
+# AGENTS.md und tests/source-invariants.sh in Prosa referenziert, eine davon
+# historisch ("standen bis 20.08.26 in Sektion H"). Umnummerieren haette fuenf
+# Verweise nachziehen muessen und einen davon mehrdeutig gemacht.
+
+if [ ! -f "$REPO_ROOT/index.js" ]; then
+  # §18a (c): fehlende Quelle ist ein FEHLER, kein Grund zum Ueberspringen —
+  # sonst laeuft jeder Vergleich unten leer-wahr durch.
+  ko "index.js nicht gefunden — Handshake nicht gegen die Konstanten pruefbar"
+else
+  I_NAME=$(src_const SERVER_NAME)
+  I_VER=$(src_const SERVER_VERSION)
+  I_PROTO=$(src_const PROTOCOL_VERSION)
+
+  # ⚠️ EXISTENZ JEDER QUELLE EIGENSTAENDIG PRUEFEN (§18a c). Ein umbenanntes
+  # `const PROTOCOL_VERSION` liefert "" — und "" gegen "" ist gruen. Genau dieser
+  # Fall ist in AGENTS.md als Beleg fuer (c) festgehalten.
+  MISSING=""
+  [ -n "$I_NAME" ]  || MISSING="$MISSING SERVER_NAME"
+  [ -n "$I_VER" ]   || MISSING="$MISSING SERVER_VERSION"
+  [ -n "$I_PROTO" ] || MISSING="$MISSING PROTOCOL_VERSION"
+  if [ -n "$MISSING" ]; then
+    ko "Konstante(n) nicht aus index.js gelesen:$MISSING — Vergleiche waeren leer gegen leer (§18a c)"
+  else
+    ok "Konstanten aus index.js gelesen (SERVER_NAME, SERVER_VERSION, PROTOCOL_VERSION)"
+
+    # Die Anfrage nennt BEWUSST eine andere protocolVersion als der Server fuehrt.
+    # Der Server liest params.protocolVersion heute nirgends und antwortet
+    # unbedingt mit seiner eigenen — am 29.08.2026 am Code gemessen (drei
+    # Vorkommen von protocolVersion: server-card, initialize, ext-apps-Literal;
+    # params.protocolVersion kommt nicht vor).
+    #
+    # ⚠️ DIESE ASSERTION NAGELT DEN HEUTIGEN VERTRAG FEST, nicht den kuenftigen.
+    # Wer Versionsverhandlung einbaut (MCP-Revision 2026-07-28), macht sie ROT —
+    # und das ist der Zweck: dieselbe Logik wie beim Golden Master (§19). Rot
+    # heisst dann "der Handshake-Vertrag hat sich geaendert, aendere die Assertion
+    # ABSICHTLICH mit", nicht "repariere das Skript".
+    HS_CODE=$(curl -s -m 20 -o "$TMP/init.json" -w '%{http_code}' \
+      -X POST "$BASE$CARD_EP" -H 'content-type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01","clientInfo":{"name":"probe","version":"0"},"capabilities":{}}}')
+    eq "initialize: HTTP 200" "$HS_CODE" "200"
+
+    # --- protocolVersion gegen die KONSTANTE, nicht gegen ein Literal ----------
+    # Ein Literal hier waere die zweite Stelle fuer dieselbe Groesse (§7) und
+    # muesste bei jedem Bump mitgezogen werden.
+    eq "initialize protocolVersion == PROTOCOL_VERSION (Source)" \
+       "$(jq -r '.result.protocolVersion // ""' "$TMP/init.json")" "$I_PROTO"
+
+    # §11: die zweite 2026er-Version (ext-apps LATEST_PROTOCOL_VERSION) wird hier
+    # NICHT noch einmal geprueft. tests/source-invariants.sh haelt fest, dass die
+    # Konstante nicht der ext-apps-Wert ist; zusammen mit der Zeile darueber folgt
+    # die servierte Seite daraus. Eine dritte Assertion waere dieselbe Aussage an
+    # einer dritten Stelle.
+
+    # --- serverInfo ------------------------------------------------------------
+    eq "initialize serverInfo.name == SERVER_NAME (Source)" \
+       "$(jq -r '.result.serverInfo.name // ""' "$TMP/init.json")" "$I_NAME"
+    eq "initialize serverInfo.version == SERVER_VERSION (Source)" \
+       "$(jq -r '.result.serverInfo.version // ""' "$TMP/init.json")" "$I_VER"
+
+    # title ist ein Literal in index.js und KEINE Modul-Konstante. Ein
+    # Erwartungswert hier waere eine zweite Stelle fuer eine Zeichenkette, die
+    # nirgends sonst steht — geprueft wird deshalb nur, DASS er da ist.
+    HS_TITLE=$(jq -r '.result.serverInfo.title // ""' "$TMP/init.json")
+    if [ -n "$HS_TITLE" ]; then
+      ok "initialize serverInfo.title gesetzt ($HS_TITLE)"
+    else
+      ko "initialize serverInfo.title fehlt oder ist leer"
+    fi
+
+    # --- capabilities ----------------------------------------------------------
+    # Geprueft wird die STRUKTUR, nicht der Inhalt: welche Faehigkeiten der Server
+    # ankuendigt, und dass jede ein boolesches listChanged traegt. Ein Client, der
+    # prompts/resources/tools erwartet, bricht still, wenn eines wegfaellt.
+    eq "initialize capabilities: Schluessel" \
+       "$(jq -r '(.result.capabilities // {}) | keys | join(",")' "$TMP/init.json")" \
+       "prompts,resources,tools"
+    eq "initialize capabilities: listChanged ueberall boolean" \
+       "$(jq -r '[(.result.capabilities // {}) | to_entries[] | select((.value.listChanged|type) == "boolean")] | length' "$TMP/init.json")" \
+       "3"
+
+    # --- ping ------------------------------------------------------------------
+    # ping ist oeffentlich (PUBLIC_METHODS) und antwortet mit einem leeren
+    # result-Objekt. Bisher pruefte das nichts.
+    PING_CODE=$(curl -s -m 20 -o "$TMP/ping.json" -w '%{http_code}' \
+      -X POST "$BASE$CARD_EP" -H 'content-type: application/json' \
+      -d '{"jsonrpc":"2.0","id":2,"method":"ping"}')
+    eq "ping: HTTP 200"            "$PING_CODE" "200"
+    eq "ping: leeres result-Objekt" "$(jq -c '.result // "FEHLT"' "$TMP/ping.json")" "{}"
+  fi
 fi
 
 # =============================================================================
