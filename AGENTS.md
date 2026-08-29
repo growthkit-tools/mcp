@@ -197,10 +197,19 @@ Golden LOKAL:    npm run dev                     # Terminal 1
                  # Läuft OHNE .dev.vars: SUPABASE_URL steht in [vars], KV wird lokal
                  # simuliert, und A–G fassen nur unauthentifizierte Pfade an.
                  # Sektionen sind nicht gleichartig: A, C, D, E, F prüfen nur die
-                 # servierte Fläche. B (server.json), G (Golden) und H (index.js)
-                 # vergleichen den Checkout GEGEN die Fläche und gelten nur, wenn beide
-                 # Seiten aus demselben Commit stammen. Die frühere Kurzformel
-                 # „A–G gegen die URL, H von Disk" war falsch.
+                 # servierte Fläche. B (server.json), G (Golden), H (index.js) und
+                 # I (Handshake) vergleichen den Checkout GEGEN die Fläche und gelten
+                 # nur, wenn beide Seiten aus demselben Commit stammen. Die frühere
+                 # Kurzformel „A–G gegen die URL, H von Disk" war falsch.
+Handshake:       ./scripts/probe.sh <base-url>   # Sektion I, seit 29.08.2026
+                 # Nagelt fest, was initialize liefern MUSS: protocolVersion gegen die
+                 # Konstante (nicht gegen ein Literal — §7), serverInfo.name/.version
+                 # gegen SERVER_NAME/SERVER_VERSION, die drei capabilities-Schlüssel
+                 # mit booleschem listChanged, und dass ping mit {} antwortet.
+                 # ⚠️ GRENZE, nachgemessen: wer die KONSTANTE bumpt, bewegt beide
+                 # Seiten und bleibt grün. Das ist beabsichtigt (§7: eine Quelle) und
+                 # heißt zugleich, dass kein Test prüft, ob der Server die Revision,
+                 # die er ansagt, auch implementiert.
 Probe:           ./scripts/probe.sh <base-url>   # lokal oder Preview-Version-URL
 Preview-URL:     https://<branch-slug>-growthkit-mcp.purple-sun-a0b3.workers.dev
                  (Branch-Slug = Branch-Name mit '/' → '-')
