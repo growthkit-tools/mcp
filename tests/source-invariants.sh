@@ -438,5 +438,84 @@ EOF
   fi
 fi
 
+# --- Ungedeckte Assertions · Schuldschein ------------------------------------
+# WAS DAS IST. Eine Assertion ohne roten Lauf gilt als nicht verifiziert (§18a).
+# Nicht jede Assertion in diesem Repo hat einen — die Erhebung vom 30.08.2026 hat
+# sechzehn Gruppen gefunden, deren Rot-Beleg sich in keinem Commit-Body nachweisen
+# laesst. Jede traegt am Ort einen Marker; die Liste unten deklariert sie.
+#
+# ⚠️ LISTE STATT ZAHL, und zwar aus einem Grund. Eine Zahl sagt, WIE VIELE offen
+# sind; eine Liste sagt, WELCHE. Nur die Liste faengt beide Fehlerrichtungen: einen
+# neuen, nicht deklarierten Marker UND einen deklarierten Eintrag, dessen Marker
+# verschwunden ist. Bei einer Obergrenze waere das Zweite unsichtbar — man
+# falsifiziert, entfernt den Marker, zieht die Grenze nicht nach, und die Grenze
+# bedeutet ab da nichts mehr. Sie waechst nicht, sie VERROTTET, und das ist
+# schlechter, weil es nicht auffaellt.
+#
+# Die Liste darf SCHRUMPFEN und nie wachsen. Wer eine NEUE Assertion schreibt,
+# falsifiziert sie und traegt sie hier gar nicht erst ein.
+#
+# ⚠️ KEINE ZWEITE KATEGORIE "LOKAL NICHT FALSIFIZIERBAR", und das ist gemessen,
+# nicht weggelassen. Der Verdacht lag nahe, dass die auth-paths-Eintraege auf eine
+# deployte Flaeche warten statt auf Arbeit — ein Zustand, der sich anders verhaelt,
+# weil niemand nachlaessig war. Am 30.08.2026 nachgepruft: `tests/auth-paths.sh`
+# laeuft gegen `wrangler dev` mit 19 gruen / 0 rot. Es ist secret-frei, genau wie
+# sein Kopf es sagt. Was eine deployte Flaeche braucht, ist `authed-smoke.sh` —
+# und dessen Assertions SIND falsifiziert, nur gegen Production. Die zweite
+# Kategorie haette also null Mitglieder und waere ein unbemerkt toter Zweig
+# (§18a a). Sie kommt, wenn es den ersten Fall gibt, und nicht vorher.
+UNPROVEN_DECLARED="auth-paths-a-401-codes auth-paths-a-fehlermeldungen auth-paths-b-toolslist-offen auth-paths-b-initialize-offen auth-paths-b-toolslist-ungueltiger-token report-tools-katalog-praesenz report-tools-schema-form report-tools-domain-beispiele report-tools-description-laenge report-tools-auth-grenze probe-b-card-felder probe-b-serverjson-sync probe-c-oauth-triplet probe-d-toolslist-offen probe-e-app-private probe-f-tool-katalog"
+
+# ⚠️ DIE SUCHE DARF NICHT AUF DEN EIGENEN TEXT HEREINFALLEN. Die Marker liegen in
+# Shell-Dateien — also auch in DIESER. Ein literales Muster im Code traefe sich
+# selbst und meldete einen Marker, den es als Assertion nicht gibt. Deshalb wird
+# der Token zur LAUFZEIT zusammengesetzt und steht nirgends am Stueck in einer
+# gescannten Codezeile.
+#
+# Weil das eine Behauptung ueber das eigene Werkzeug ist, wird sie GEPRUEFT statt
+# geglaubt: Richtung 1 unten verlangt, dass JEDER gefundene Marker eine deklarierte
+# ID traegt. Ein Selbsttreffer aus diesem Kommentar haette keine und machte die
+# Sektion sofort rot.
+UP_TOK="UNPROV""EN"
+
+UP_FILES=$(g ls-files 'tests/*.sh' 'scripts/*.sh' '.githooks/*' '.claude/hooks/*.sh' | tr '\n' ' ')
+if [ -z "$(printf '%s' "$UP_FILES" | tr -d ' ')" ]; then
+  ko "Keine Dateien fuer den Marker-Scan gefunden — die Sektion liefe leer-wahr durch (§18a a)"
+else
+  # shellcheck disable=SC2086
+  FOUND=$(cd "$REPO_ROOT" && grep -hoE "#[[:space:]]*${UP_TOK}\[[a-z0-9-]+\]" $UP_FILES 2>/dev/null \
+          | sed -E "s/.*\[([a-z0-9-]+)\].*/\1/" | sort -u)
+  DECL=$(printf '%s\n' $UNPROVEN_DECLARED | grep -v '^$' | sort -u)
+  FOUND_N=$(printf '%s\n' "$FOUND" | grep -c . || true)
+  DECL_N=$(printf '%s\n' "$DECL"  | grep -c . || true)
+
+  if [ "${DECL_N:-0}" -eq 0 ] && [ "${FOUND_N:-0}" -eq 0 ]; then
+    ok "Schuldschein getilgt: keine Assertion mehr ohne Rot-Beleg — dieser Abschnitt darf entfallen"
+  elif [ "${FOUND_N:-0}" -eq 0 ]; then
+    # Der gefaehrlichste Fall: ein kaputtes Suchmuster findet nichts, und ohne
+    # diesen Zweig meldete die Sektion dann "alles erledigt".
+    ko "Kein einziger Marker gefunden, aber $DECL_N deklariert — Suchmuster kaputt oder Marker-Format geaendert (§18a a/c)"
+  else
+    NUR_GEFUNDEN=$(comm -23 <(printf '%s\n' "$FOUND") <(printf '%s\n' "$DECL") | tr '\n' ' ')
+    NUR_DEKLARIERT=$(comm -13 <(printf '%s\n' "$FOUND") <(printf '%s\n' "$DECL") | tr '\n' ' ')
+
+    # Richtung 1: ein Marker, den niemand deklariert hat. Hier landet auch ein
+    # Selbsttreffer aus dem Kommentartext oben — mit einer ID, die es nicht gibt.
+    if [ -z "$NUR_GEFUNDEN" ]; then
+      ok "Schuldschein: alle $FOUND_N gefundenen Marker sind deklariert"
+    else
+      ko "Marker ohne Eintrag in UNPROVEN_DECLARED:$NUR_GEFUNDEN — eintragen, oder die Assertion falsifizieren und den Marker entfernen. Die Liste darf NICHT wachsen."
+    fi
+
+    # Richtung 2: ein Eintrag, dessen Marker weg ist. Das ist der GUTE Fall —
+    # jemand hat falsifiziert. Er muss trotzdem rot sein, sonst verrottet die Liste.
+    if [ -z "$NUR_DEKLARIERT" ]; then
+      ok "Schuldschein aktuell: alle $DECL_N Eintraege tragen noch ihren Marker"
+    else
+      ko "UNPROVEN_DECLARED nennt IDs ohne Marker:$NUR_DEKLARIERT — falsifiziert? Dann hier streichen (die Liste schrumpft, das ist der Zweck)"
+    fi
+  fi
+fi
+
 [ "$NESTED" -eq 1 ] || printf '\n\033[1m%s\033[0m\n' "Ergebnis: $PASS grün, $FAIL rot"
 [ "$FAIL" -eq 0 ] || exit 1
