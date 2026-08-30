@@ -425,7 +425,7 @@ async function maybeDemoCta(env, accessToken, toolName, client, lang) {
   try {
     count = parseInt((await env.DEMO_RL.get(`demo:calls:${accessToken}`)) || "0", 10) + 1;
     await env.DEMO_RL.put(`demo:calls:${accessToken}`, String(count), { expirationTtl: 3600 });
-  } catch (e) { return null; }
+  } catch { return null; }
   if (count <= DEMO_CTA_SKIP || count % DEMO_CTA_EVERY !== 0) return null;
   const url = `https://growthkit.tools/${lang || "en"}/pricing?utm_source=${encodeURIComponent(client || "other")}&utm_medium=mcp_demo&utm_campaign=tool_cta`;
   let msg;
@@ -3066,13 +3066,13 @@ if (name === "getChapterOverview") {
     try {
       const { data } = await callEdge(EDGE_EMBED_URL, { action: "count", user_token: userToken, metadata_filter: { chapter: ch } });
       counts[ch] = data?.count ?? 0;
-    } catch (e) { counts[ch] = "error"; }
+    } catch { counts[ch] = "error"; }
   }
   let total = 0;
   try {
     const { data } = await callEdge(EDGE_EMBED_URL, { action: "count", user_token: userToken });
     total = data?.count ?? 0;
-  } catch (e) { total = "error"; }
+  } catch { total = "error"; }
   const overview = chapters.map(ch => ch + ": " + counts[ch] + " memories").join("\n");
   const structuredContent = {
     chapters: chapters.map(ch => ({ chapter: ch, count: typeof counts[ch] === "number" ? counts[ch] : 0 })),
@@ -3562,7 +3562,7 @@ if (name === "getChapterOverview") {
               body: JSON.stringify({ user_token: userToken, campaign_lead_id: leadId }),
             });
             let data = {};
-            try { data = await res.json(); } catch (e) { data = {}; }
+            try { data = await res.json(); } catch { data = {}; }
             if (res.ok && data && data.ok) {
               return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call initiated (call_log_id " + data.call_log_id + ")." }], structuredContent: { ok: true, call_log_id: data.call_log_id } } });
             }
@@ -3602,7 +3602,7 @@ if (name === "getChapterOverview") {
               body: JSON.stringify(payload),
             });
             let data = {};
-            try { data = await res.json(); } catch (e) { data = {}; }
+            try { data = await res.json(); } catch { data = {}; }
             if (res.ok && data && data.ok) {
               return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Call outcome saved." }], structuredContent: { ok: true, campaign_lead_id: data.campaign_lead_id, reminder_created: data.reminder_created === true } } });
             }
@@ -4118,7 +4118,7 @@ if (name === "getChapterOverview") {
           const decoded = atob(authHeader.replace("Basic ", ""));
           const [iid] = decoded.split(":");
           clientIdFromAuth = decodeURIComponent(iid);
-        } catch (e) {}
+        } catch { /* kaputter Basic-Header: clientIdFromAuth bleibt bewusst ungesetzt */ }
       }
 
       const grant_type = body.grant_type;
