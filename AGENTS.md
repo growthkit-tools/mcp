@@ -641,6 +641,44 @@ dass jemand GitHub befragen muss. Wie nötig das ist, zeigt `supabase`, hier nac
 und `Co-authored-by`, über vier Suiten hinweg. Die Falsifikationen sind, falls sie
 stattfanden, nicht mehr auffindbar.
 
+#### Zuerst: der Rückweg — vor der ersten Injektion, nicht danach
+
+**Sicherung anlegen, bevor injiziert wird. Zurückgestellt wird aus der Sicherung.**
+
+```bash
+cp <datei> "$SCRATCH/<datei>.backup"   # VOR der ersten Injektion
+…injizieren, prüfen…
+cp "$SCRATCH/<datei>.backup" <datei>   # zurückstellen
+```
+
+⚠️ **`git checkout -- <datei>` ist der falsche Rückweg, sobald die Arbeit noch nicht im
+Commit steht** — und das ist bei einer Falsifikation der Normalfall, weil man gerade das
+baut, was man prüft. Der Grund ist nicht Geschmackssache, sondern die Semantik. Am
+30.08.2026 an einem Wegwerf-Repo gemessen, alle drei Fälle:
+
+| Zustand der Arbeit | Rückweg | Ergebnis |
+|---|---|---|
+| nur im Arbeitsbaum, ungestagt | `git checkout -- f` | **Arbeit weg** — auf HEAD zurück |
+| gestagt (`git add`) | `git checkout -- f` | Arbeit **überlebt**, sie kommt aus dem Index |
+| gestagt | `git checkout HEAD -- f` | **Arbeit weg**, Index eingeschlossen |
+
+`git checkout -- <datei>` stellt aus dem **Index** her, nicht aus HEAD. Es ist damit genau
+dann richtig, wenn die eigene Arbeit im Index liegt, und genau dann zerstörerisch, wenn sie
+nur im Arbeitsbaum steht. **Wer sich das im Moment der Injektion merken muss, merkt es sich
+nicht** — die Sicherung nimmt die Frage weg.
+
+⚠️ **Der Schaden ist stumm.** Die verlorene Arbeit macht nichts rot: die Suite läuft danach
+mit einer Assertion weniger weiter und meldet grün. Am 29.08. hier so passiert — 13 statt 14
+grün, ohne ein einziges rotes Zeichen; am 30.08. noch einmal, diesmal an einer Datei, die
+ein Vorcommit gerade sauber gemacht hatte, sodass die beiden Folgeproben gegen einen
+verunreinigten Prüfling liefen und Verstöße mitmeldeten, die es nicht mehr geben sollte.
+
+⚠️ **Und der Grund, aus dem das hier als Handgriff steht und nicht als Warnung:** die Regel
+stand nach dem ersten Mal in einem Commit-Body — und ist am nächsten Tag ein zweites Mal
+eingetreten. Aufgeschrieben zu haben reicht nicht, weil der Handgriff **vor** die erste
+Injektion gehört und die Nachbereitung der Moment ist, in dem man nicht nachliest. Deshalb
+steht er hier **vor Teil 1** und nicht bei Teil 3.
+
 #### Teil 1 — Der Block
 
 Vorlage, wörtlich aus `993ef19` (20.08.2026):
@@ -1066,7 +1104,7 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | §7a-Ausnahme-Absatz | `growthkit-website` | hier PR #24 · in `supabase` |
 | Notausgang `enforce_admins` | `growthkit-website` | hier PR #24 · in `supabase` |
 
-**Offen — Stand 27.08.2026:**
+**Offen — Stand 30.08.2026:**
 
 | Gegenstand | Ursprung | Stand |
 |---|---|---|
@@ -1074,6 +1112,15 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | Bereichs-Scan `origin/main..HEAD` | **hier** (28.08.) | nur hier — die Begründung ist „öffentliches Repo" und gilt für die Nachbarn nicht |
 | **§18b** (Falsifikations-Notation) | Teil 1 **hier**, Teil 2+3 `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
 | Falsifikations-**Pflicht** bei Leitplanke 18 | `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
+| §18b **Rückweg** (Sicherung vor der Injektion) | **hier** (30.08.) | hier seit 30.08. · in **beiden** Nachbarn **fehlt** — nachgesehen, nicht angenommen |
+
+⚠️ **Der Rückweg-Handgriff gehört in beide Nachbar-Repos, und das ist gemessen:** dort steht
+§18b bereits, aber `grep -ciE "sicherungskopie|rückweg|checkout -- "` über beide `AGENTS.md`
+liefert **null**. Gleichzeitig steht `git checkout --` in `growthkit-website` in vier
+Commit-Bodies und in `supabase` in einem — der Handgriff wird dort also gefahren, nur ohne
+die Regel daneben. Die Klasse ist nicht repo-spezifisch: sie hängt an git, nicht an diesem
+Repo. **Übertragen kann ich sie von hier aus nicht** — ein CC-Lauf arbeitet in genau einem
+Repo (§3).
 
 ⚠️ **Die drei Zeilen gehören zusammen und dürfen nicht einzeln wandern.** Eine Notation ohne
 die Pflicht, die sie notiert, ist eine Formvorschrift ohne Gegenstand; das war hier bis zum
