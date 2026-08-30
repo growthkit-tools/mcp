@@ -316,5 +316,124 @@ else
   fi
 fi
 
+# =============================================================================
+sec "G · getAeoReport: Feldliste gegen LIVE und gegen die BESCHREIBUNG"
+# =============================================================================
+# WAS HIER GEPRUEFT WIRD UND WARUM ES HIER STEHT.
+#
+# Die Beschreibung von getAeoReport zaehlt die Serienfelder auf. Sie beschreibt
+# damit eine Struktur, die in einem ANDEREN Repo entsteht
+# (supabase/functions/get-aeo-history, Interfaces AeoSeriesPoint und
+# AeoEnginePoint). Am 30.08.2026 war sie zweimal veraltet: `per_engine` fehlte
+# seit supabase PR #42, und `period` war NIE benannt.
+#
+# ⚠️ WARUM NICHT EIN GREP UEBER DAS NACHBAR-REPO. Der CI-Checkout dieses Repos
+# enthaelt `supabase` nicht. Eine solche Pruefung waere lokal gruen und in CI ein
+# stiller Skip — §18a (c), und heute mehrfach als Klasse gefangen.
+#
+# ⚠️ WARUM HIER UND NICHT IN report-tools.sh. Diese Pruefung braucht ECHTE DATEN
+# und damit einen Token; report-tools.sh ist bewusst secret-frei. Der Aufruf
+# hier schliesst die Repo-Grenze ueber das LAUFENDE SYSTEM: es ist die dritte
+# Instanz, die beide Seiten kennt. Eine Drift drueben schlaegt als roter
+# Live-Vergleich durch, ohne dass dieses Repo das andere lesen muesste.
+#
+# DIE DEKLARIERTE LISTE UNTEN IST DIE EINZIGE STELLE IM REPO (§7a). Sie wird
+# gegen ZWEI Seiten gehalten — die Live-Keys und den Beschreibungstext — und ist
+# in beide Richtungen rot.
+AEO_SERIES_FIELDS="period visibility share_of_voice avg_position own_cited prompts_scored attempted_but_no_data per_engine"
+AEO_ENGINE_FIELDS="engine prompts_scored attempted_but_no_data visibility share_of_voice avg_position"
+
+# ⚠️ NICHT-FELD-VOKABELN. Namen im Beschreibungstext, die KEIN Serienfeld sind
+# und es auch nicht sein sollen. Am 30.08.2026 ist das genau einer: `latest_card`
+# ist das Geschwister von `series` im Antwort-Umschlag. Die Liste ist bewusst
+# kurz — jeder weitere Eintrag ist eine Stelle, an der sich eine echte Drift
+# verstecken koennte, und gehoert einzeln begruendet.
+AEO_NON_FIELDS="latest_card"
+
+AEO_DESC=$(jq -r '.result.tools[]? | select(.name=="getAeoReport") | .description // ""' "$TMP/auth.json")
+AEO_EX=$(jq -r '.result.tools[]? | select(.name=="getAeoReport")
+                | .inputSchema.properties.domain.examples[0] // ""' "$TMP/auth.json")
+
+if [ -z "$AEO_DESC" ]; then
+  ko "getAeoReport hat keine Description — der Textvergleich liefe gegen einen leeren String und bestuende immer (§18a c)"
+elif [ -z "$AEO_EX" ]; then
+  ko "getAeoReport hat kein domain.examples[0] — ohne Beispielwert kein Live-Vergleich"
+else
+  post "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"getAeoReport\",\"arguments\":{\"domain\":\"$AEO_EX\",\"weeks\":2}}}" \
+       "$TMP/aeo.json" auth
+
+  AEO_ERR=$(jq -r '.error.message // ""' "$TMP/aeo.json")
+  AEO_BODY=$(jq -r '.result.content[0].text // ""' "$TMP/aeo.json")
+
+  # ⚠️ NICHT-LEER-GUARD, KEIN SKIP (§18a a). Ein Workspace ohne AEO-Reports ist
+  # ein moeglicher Zustand — aber dann hat diese Assertion NICHTS verglichen und
+  # darf nicht gruen melden. Sie wird rot und sagt, dass sie nichts pruefen
+  # konnte. Ein Skip an dieser Stelle waere eine Pruefung, die mit ihrem Eingang
+  # verschwindet.
+  N_SERIES=$(printf '%s' "$AEO_BODY" | jq -r '[.domains // {} | .[] | .series // [] | length] | add // 0' 2>/dev/null)
+  N_ENGINE=$(printf '%s' "$AEO_BODY" | jq -r '[.domains // {} | .[] | .series // [] | .[] | .per_engine // [] | length] | add // 0' 2>/dev/null)
+
+  if [ -n "$AEO_ERR" ]; then
+    ko "getAeoReport('$AEO_EX') abgelehnt: $AEO_ERR"
+  elif [ -z "$AEO_BODY" ]; then
+    ko "getAeoReport('$AEO_EX') lieferte keinen auswertbaren Body"
+  elif [ "${N_SERIES:-0}" -eq 0 ]; then
+    ko "getAeoReport('$AEO_EX') lieferte 0 Serienpunkte — der Feldvergleich haette nichts zu vergleichen und waere leer-wahr gruen (§18a a)"
+  elif [ "${N_ENGINE:-0}" -eq 0 ]; then
+    ko "getAeoReport('$AEO_EX') lieferte 0 per_engine-Eintraege — die Engine-Felder waeren ungeprueft (§18a a)"
+  else
+    ok "getAeoReport('$AEO_EX'): $N_SERIES Serienpunkt(e), $N_ENGINE per_engine-Eintrag/Eintraege"
+
+    LIVE_S=$(printf '%s' "$AEO_BODY" | jq -r '[.domains[] | .series[] | keys[]] | unique | .[]' | sort)
+    LIVE_E=$(printf '%s' "$AEO_BODY" | jq -r '[.domains[] | .series[] | .per_engine[] | keys[]] | unique | .[]' | sort)
+
+    # --- Richtung 1: LIVE gegen die deklarierte Liste, beide Wege -------------
+    for pair in "Serie:$LIVE_S:$AEO_SERIES_FIELDS" "per_engine:$LIVE_E:$AEO_ENGINE_FIELDS"; do
+      LBL=${pair%%:*}; REST=${pair#*:}; LIVE=${REST%%:*}; DECL=${REST#*:}
+      NUR_LIVE=$(comm -23 <(printf '%s\n' "$LIVE" | sort) <(printf '%s\n' $DECL | sort) | tr '\n' ' ')
+      NUR_DECL=$(comm -13 <(printf '%s\n' "$LIVE" | sort) <(printf '%s\n' $DECL | sort) | tr '\n' ' ')
+      if [ -z "$NUR_LIVE" ]; then
+        ok "$LBL: kein Live-Feld fehlt in der deklarierten Liste"
+      else
+        ko "$LBL: Live-Feld(er) nicht deklariert:$NUR_LIVE — das Backend liefert mehr, als hier steht. Liste UND Description nachziehen."
+      fi
+      if [ -z "$NUR_DECL" ]; then
+        ok "$LBL: kein deklariertes Feld fehlt live"
+      else
+        ko "$LBL: deklariert, aber live nicht vorhanden:$NUR_DECL — im Backend entfallen? Dann hier und in der Description streichen."
+      fi
+    done
+
+    # --- Richtung 2: jedes deklarierte Feld muss in der Description stehen ----
+    FEHLT_IM_TEXT=""
+    for f in $AEO_SERIES_FIELDS $AEO_ENGINE_FIELDS; do
+      case "$AEO_DESC" in *"$f"*) ;; *) FEHLT_IM_TEXT="$FEHLT_IM_TEXT $f" ;; esac
+    done
+    if [ -z "$FEHLT_IM_TEXT" ]; then
+      ok "Description nennt jedes deklarierte Feld"
+    else
+      ko "Description nennt diese Felder NICHT:$FEHLT_IM_TEXT — genau die Luecke, die per_engine und period hatten"
+    fi
+
+    # --- Richtung 3: kein erfundenes Feld im Text -----------------------------
+    # ⚠️ GRENZE, ausdruecklich: geprueft werden nur snake_case-Namen. Einwortige
+    # Namen (period, visibility, engine) sind im Fliesstext nicht von Prosa zu
+    # unterscheiden; ein `grep` darauf faende "domain" in jedem zweiten Satz.
+    # Diese Richtung faengt also erfundene MEHRWORT-Felder, nicht alle (§18a k).
+    ERFUNDEN=""
+    for t in $(printf '%s' "$AEO_DESC" | grep -oE '\b[a-z][a-z0-9]*(_[a-z0-9]+)+\b' | sort -u); do
+      case " $AEO_SERIES_FIELDS $AEO_ENGINE_FIELDS $AEO_NON_FIELDS " in
+        *" $t "*) ;;
+        *) ERFUNDEN="$ERFUNDEN $t" ;;
+      esac
+    done
+    if [ -z "$ERFUNDEN" ]; then
+      ok "Description nennt kein Feld, das es nicht gibt (snake_case geprüft)"
+    else
+      ko "Description nennt unbekannte Namen:$ERFUNDEN — Tippfehler, oder ein Feld, das es live nicht gibt"
+    fi
+  fi
+fi
+
 printf '\n\033[1mErgebnis: %d grün, %d rot\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
