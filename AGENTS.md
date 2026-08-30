@@ -160,7 +160,7 @@ melde den Widerspruch, statt ihn still zu übergehen.
 
 ```
 Tool-Versionen:  package.json (exakte Versionen, kein Caret) + package-lock.json
-                 Node: 24.16.0 · Deno: 2.8.0 (nicht in diesem Repo genutzt)
+                 Node: 24.16.0 · Deno: 2.8.0 (seit 30.08.2026 für `deno lint` genutzt)
 Lokal starten:   npm run dev                     # wrangler dev → localhost:8787
 Tests:           npm test → exit 1, ERWARTET, kein Gate
                  # Es gibt keine Testdatei und gab nie eine. Diese Zeile stand hier
@@ -174,6 +174,15 @@ Secret-Scan:     gitleaks 8.30.1 (in CI gepinnt, .github/workflows/ci.yml)
                  gitleaks detect --no-git --source . --config .gitleaks.toml
                  # derselbe Befehl, den CI faehrt. Die Pfad-Ausnahmen in der
                  # Konfig existieren nur, damit er LOKAL nicht dauerhaft rot ist.
+Lint:            ./tests/deno-lint.sh           # deno lint + Schuldschein
+                 # Bis 30.08.2026 lief hier KEIN Linter. deno lint statt eslint:
+                 # keine npm-Dependency, parst .js und .ts. Läuft im unit-Job.
+                 # Die 11 verbleibenden Verstöße stehen als LINT_DEBT IN der
+                 # Suite — Liste, keine Zahl, und sie darf nur schrumpfen.
+                 # ⚠️ deno lint hat KEINEN Massen-Suppressions-Mechanismus wie
+                 # eslint 9.32; seine Bordmittel (deno-lint-ignore, rules.exclude)
+                 # sagen alle „für immer in Ordnung". Deshalb ein eigener
+                 # Schuldschein statt einer Ausnahmeliste.
 Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
                  # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
                  # in Sektion H mit --nested hierher. Einzige Kopie von

@@ -52,6 +52,7 @@ jobs:
           bash -n tests/auth-paths.sh
           bash -n tests/authed-smoke.sh
           bash -n tests/guard-push.sh
+          bash -n tests/deno-lint.sh
 
       # Quellreine Invarianten (AGENTS.md §11): reine Funktionen des Checkouts —
       # kein HTTP, keine laufende Instanz, kein Workers Build. Deshalb HIER und
@@ -68,6 +69,39 @@ jobs:
       # selbst mit, haengt also nicht daran, welchen Branch actions/checkout
       # gerade ausgecheckt hat (push-Event: Branch, pull_request: detached HEAD).
       - run: bash tests/guard-push.sh
+
+      # ───────────────────────────────────────────────────────────────────────
+      # LINT. Bis zum 30.08.2026 lief in diesem Repo KEIN Linter — weder in CI
+      # noch lokal, und package.json hat bis heute kein lint-Script.
+      #
+      # Der Anlass kommt aus growthkit-website: dort war eslint konfiguriert und
+      # wurde nirgends aufgerufen. 29 Meldungen, seit jeher unsichtbar. Ein
+      # Linter, den niemand faehrt, ist keine Pruefung — und ein Repo ohne
+      # Linter hat wenigstens keine falsche Zusage.
+      #
+      # ⚠️ deno IN EINEM NICHT-DENO-REPO. Die Werkzeugkette hier ist Node +
+      # wrangler. deno lint ist trotzdem die guenstigste Wahl: keine Dependency
+      # im package.json, parst .js und .ts gleichermassen. eslint zoege einen
+      # Baum npm-Pakete in ein Repo, das bewusst drei devDependencies hat.
+      #
+      # Version gepinnt wie bei gitleaks: eine wandernde Linter-Version aendert
+      # die Fundmenge, ohne dass jemand etwas committet haette. Steht hier UND
+      # in AGENTS.md (Werkzeuge) — dort als Maschinen-, hier als CI-Eigenschaft.
+      - name: deno installieren
+        run: |
+          set -euo pipefail
+          V=2.8.0
+          curl -sSfL -o /tmp/deno.zip \
+            "https://github.com/denoland/deno/releases/download/v${V}/deno-x86_64-unknown-linux-gnu.zip"
+          unzip -q -o /tmp/deno.zip -d /tmp
+          sudo install -m 0755 /tmp/deno /usr/local/bin/deno
+          deno --version | head -1
+
+      # Fail-closed: die Suite endet mit 1, sobald der Ist-Zustand vom
+      # Schuldschein abweicht — in BEIDE Richtungen. Sie braucht kein Netz und
+      # keine Instanz und steht deshalb hier, im unit-Job, der nie uebersprungen
+      # wird.
+      - run: bash tests/deno-lint.sh
 
       # ═══════════════════════════════════════════════════════════════════════
       # SECRET-SCAN. Ergaenzt die Pfadform-Assertion in source-invariants.sh
