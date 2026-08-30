@@ -59,6 +59,7 @@ sec "A · Präsenz im Katalog"
 # =============================================================================
 for t in $REPORT_TOOLS; do
   N=$(jq -r --arg n "$t" '[.result.tools[] | select(.name==$n)] | length' "$TMP/list.json")
+  # UNPROVEN[report-tools-katalog-praesenz]: noch nie absichtlich rot gefahren (§18b) — nicht unter den fuenf Injektionen aus #3.
   eq "$t ist in tools/list" "$N" "1"
 done
 
@@ -69,6 +70,7 @@ for t in $REPORT_TOOLS; do
   PROPS=$(jq -r --arg n "$t" \
     '[.result.tools[] | select(.name==$n) | .inputSchema.properties // {} | keys[]] | sort | join(",")' \
     "$TMP/list.json")
+  # UNPROVEN[report-tools-schema-form]: noch nie absichtlich rot gefahren (§18b) — deckt Properties/integer/minimum/string ab; #3 injizierte nur maximum, required, user_token, _meta.
   eq "$t: Properties sind genau domain,weeks" "$PROPS" "domain,weeks"
 
   # required MUSS als leeres Array dastehen — beide Argumente sind optional.
@@ -109,6 +111,7 @@ for t in $REPORT_TOOLS; do
   N_EX=$(jq -r --arg n "$t" \
     '[.result.tools[] | select(.name==$n) | .inputSchema.properties.domain.examples[]?] | length' "$TMP/list.json")
   if [ "$N_EX" -ge 1 ]; then
+    # UNPROVEN[report-tools-domain-beispiele]: noch nie absichtlich rot gefahren (§18b) — Anzahl, Slug-Form und Nennung in der Description.
     ok "$t: domain hat $N_EX Beispiel(e)"
   else
     ko "$t: domain hat kein examples — Regression auf den Slug-Bug nicht pruefbar"
@@ -165,6 +168,7 @@ for t in $REPORT_TOOLS; do
   DLEN=$(jq -r --arg n "$t" \
     '.result.tools[] | select(.name==$n) | .description // "" | length' "$TMP/list.json")
   if [ "$DLEN" -ge "$MIN_DESC_LEN" ]; then
+    # UNPROVEN[report-tools-description-laenge]: noch nie absichtlich rot gefahren (§18b) — Laengenschwelle nie unterschritten gefahren.
     ok "$t: Description >= $MIN_DESC_LEN Zeichen ($DLEN)"
   else
     ko "$t: Description zu kurz ($DLEN < $MIN_DESC_LEN) — Platzhalter?"
@@ -187,6 +191,7 @@ for t in $REPORT_TOOLS; do
       if [ "$LEAK" = "true" ]; then
         ko "$t: abgelehnt, liefert aber trotzdem domains-Daten aus"
       else
+        # UNPROVEN[report-tools-auth-grenze]: noch nie absichtlich rot gefahren (§18b) — Ablehnung nie gegen einen offenen Pfad gefahren.
         ok "$t ohne Auth abgelehnt ($ERR)"
       fi
       ;;

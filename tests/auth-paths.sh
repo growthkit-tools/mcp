@@ -87,7 +87,9 @@ sec "A · Ablehnung mit Pfad-Diskriminator"
 # =============================================================================
 
 CODE=$(post "$CALL" "")
+# UNPROVEN[auth-paths-a-401-codes]: noch nie absichtlich rot gefahren (§18b) — die vier 401-Codes waren am main-Stand von #9 bereits gruen.
 eq "ohne Bearer: 401"                 "$CODE"                   "401"
+# UNPROVEN[auth-paths-a-fehlermeldungen]: noch nie absichtlich rot gefahren (§18b) — dito fuer die Meldungstexte; nur data.path war rot.
 eq "ohne Bearer: Meldung"             "$(jqr '.error.message')" "Authentication required"
 eq "ohne Bearer: path"                "$(jqr '.error.data.path')" "none"
 
@@ -118,6 +120,7 @@ sec "B · Öffentliche Pfade bleiben offen"
 # (Smithery, Glama, mcp.so) ruft tools/list ohne Token. Das MUSS 200 bleiben.
 
 CODE=$(post "$LIST" "")
+# UNPROVEN[auth-paths-b-toolslist-offen]: noch nie absichtlich rot gefahren (§18b) — Regressionswaechter aus #9, dort ausdruecklich 'keine Nachweise'.
 eq "tools/list ohne Bearer: 200"      "$CODE" "200"
 N=$(jqr '.result.tools | length')
 eq "tools/list ohne Bearer: Array-Typ" "$(jqr '.result.tools | type')" "array"
@@ -130,6 +133,7 @@ else
 fi
 
 CODE=$(post "$INIT" "")
+# UNPROVEN[auth-paths-b-initialize-offen]: noch nie absichtlich rot gefahren (§18b) — dito.
 eq "initialize ohne Bearer: 200"      "$CODE" "200"
 PV=$(jqr '.result.protocolVersion')
 if [ -n "$PV" ] && [ "$PV" != "null" ]; then
@@ -142,6 +146,7 @@ fi
 # durchfallen, nicht 401 werfen. Der gk_-Zweig läuft hier, findet nichts und
 # darf trotzdem nicht blockieren — requiresAuth ist für tools/list false.
 CODE=$(post "$LIST" "Bearer gk_offensichtlich_ungueltig_kein_echtes_token")
+# UNPROVEN[auth-paths-b-toolslist-ungueltiger-token]: noch nie absichtlich rot gefahren (§18b) — dito.
 eq "tools/list mit ungültigem gk_: 200" "$CODE" "200"
 N=$(jqr '.result.tools | length')
 if [ -n "$N" ] && [ "$N" != "null" ] && [ "$N" -gt 0 ] 2>/dev/null; then

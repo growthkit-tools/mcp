@@ -84,6 +84,7 @@ CARD_TOOLS=$(jq -r '.tools'              "$TMP/card.json")
 CARD_URL=$(jq   -r '.serverUrl'          "$TMP/card.json")
 CARD_EP=$(jq    -r '.transport.endpoint' "$TMP/card.json")
 
+# UNPROVEN[probe-b-card-felder]: noch nie absichtlich rot gefahren (§18b) — name/serverUrl/tools/version der Card; #2 falsifizierte Golden- und Version-Drift, nicht diese.
 eq "Card name"          "$CARD_NAME"          "$EXP_SERVER_NAME"
 eq "Card serverUrl"     "$(norm "$CARD_URL")" "$EXP_CANONICAL"
 eq "Card tools=dynamic" "$CARD_TOOLS"         "$EXP_CARD_TOOLS"
@@ -101,6 +102,7 @@ if [ -f "$REPO_ROOT/server.json" ]; then
   SJ_URL=$(jq  -r '.remotes[0].url' "$REPO_ROOT/server.json")
   CARD_DESC=$(jq -r '.description'  "$TMP/card.json")
 
+  # UNPROVEN[probe-b-serverjson-sync]: noch nie absichtlich rot gefahren (§18b) — die vier server.json-gegen-Card-Vergleiche.
   eq "server.json name  == Card"       "$SJ_NAME" "$CARD_NAME"
   eq "server.json version == Card"     "$SJ_VER"  "$CARD_VER"
   eq "server.json description == Card" "$SJ_DESC" "$CARD_DESC"
@@ -118,6 +120,7 @@ if [ -f "$TMP/opr.json" ] && [ -f "$TMP/oas.json" ]; then
   OAS_ISS=$(jq -r '.issuer'                   "$TMP/oas.json")
   CARD_RM=$(jq -r '.authentication.resourceMetadata' "$TMP/card.json")
 
+  # UNPROVEN[probe-c-oauth-triplet]: noch nie absichtlich rot gefahren (§18b) — alle vier Triplet-Vergleiche (§10).
   eq "protected-resource.resource"    "$(norm "$OPR_RES")" "$EXP_CANONICAL"
   eq "protected-resource.auth_server" "$(norm "$OPR_AS")"  "$EXP_CANONICAL"
   eq "authorization-server.issuer"    "$(norm "$OAS_ISS")" "$EXP_CANONICAL"
@@ -134,6 +137,7 @@ curl -s -m 20 -X POST "$BASE$CARD_EP" -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' -o "$TMP/list.json"
 
 if jq -e '.result.tools | type == "array"' "$TMP/list.json" >/dev/null 2>&1; then
+  # UNPROVEN[probe-d-toolslist-offen]: noch nie absichtlich rot gefahren (§18b) — Registry-Discovery-Waechter, nie zugemacht gefahren.
   ok "tools/list ohne Auth erreichbar (Registry-Discovery)"
 else
   ko "tools/list ohne Auth NICHT erreichbar — Registry-Scores in Gefahr"
@@ -159,6 +163,7 @@ for t in $APP_PRIVATE_TOOLS; do
   if [ "$PRESENT" != "1" ]; then
     ko "$t fehlt in tools/list — weggelassene Tools lehnt der Host als 'unknown' ab (§13)"
   elif [ "$VIS" = "app" ]; then
+    # UNPROVEN[probe-e-app-private]: noch nie absichtlich rot gefahren (§18b) — app-private und modell-sichtbar (§12/§13), compliance-tragend und ungeprueft.
     ok "$t ist app-private (_meta.ui.visibility=[app])"
   else
     ko "$t NICHT app-private — visibility='$VIS'. Das Modell könnte es aufrufen (UWG §7)"
@@ -180,6 +185,7 @@ if [ "$N" -gt 0 ]; then ok "$N Tools gelistet"; else ko "Keine Tools gelistet"; 
 
 NOSCHEMA=$(jq -r '[.result.tools[] | select(.inputSchema == null) | .name] | join(", ")' "$TMP/list.json")
 if [ -z "$NOSCHEMA" ]; then
+  # UNPROVEN[probe-f-tool-katalog]: noch nie absichtlich rot gefahren (§18b) — inputSchema-Vollstaendigkeit und Description-Mindestlaenge.
   ok "Alle Tools haben ein inputSchema"
 else
   ko "Tools ohne inputSchema: $NOSCHEMA"
