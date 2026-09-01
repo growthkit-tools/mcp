@@ -186,6 +186,12 @@ Lint:            ./tests/deno-lint.sh           # deno lint + Schuldschein
                  # eslint 9.32; seine Bordmittel (deno-lint-ignore, rules.exclude)
                  # sagen alle „für immer in Ordnung". Deshalb ein eigener
                  # Schuldschein statt einer Ausnahmeliste.
+Commit-Guard:    ./tests/pre-commit.sh          # .githooks/pre-commit, Branch-Haelfte
+                 # End-to-end: haengt den Hook per core.hooksPath in Wegwerf-Repos
+                 # und loest ihn mit echten `git commit`-Aufrufen aus — WANN git
+                 # ihn ruft, ist die Frage, an der der Entwurf haengt (sauberer
+                 # merge: nie, Konfliktaufloesung und --amend: doch). Ein direkter
+                 # Skriptaufruf misst das nicht. Laeuft im unit-Job.
 Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
                  # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
                  # in Sektion H mit --nested hierher. Einzige Kopie von
