@@ -171,6 +171,9 @@ Tests:           npm test → exit 1, ERWARTET, kein Gate
 Secret-Scan:     gitleaks 8.30.1 (in CI gepinnt, .github/workflows/ci.yml)
                  git config core.hooksPath .githooks   # einmal je Clone, sonst
                  # liegt .githooks/pre-commit im Repo und laeuft nie.
+                 # ⚠️ Der Hook traegt seit dem 01.09.2026 ZWEI Pruefungen: erst die
+                 # Branch-Haelfte (§3), dann diesen Scan. Wer core.hooksPath nicht
+                 # setzt, verliert beide.
                  gitleaks detect --no-git --source . --config .gitleaks.toml
                  # derselbe Befehl, den CI faehrt. Die Pfad-Ausnahmen in der
                  # Konfig existieren nur, damit er LOKAL nicht dauerhaft rot ist.
@@ -183,6 +186,12 @@ Lint:            ./tests/deno-lint.sh           # deno lint + Schuldschein
                  # eslint 9.32; seine Bordmittel (deno-lint-ignore, rules.exclude)
                  # sagen alle „für immer in Ordnung". Deshalb ein eigener
                  # Schuldschein statt einer Ausnahmeliste.
+Commit-Guard:    ./tests/pre-commit.sh          # .githooks/pre-commit, Branch-Haelfte
+                 # End-to-end: haengt den Hook per core.hooksPath in Wegwerf-Repos
+                 # und loest ihn mit echten `git commit`-Aufrufen aus — WANN git
+                 # ihn ruft, ist die Frage, an der der Entwurf haengt (sauberer
+                 # merge: nie, Konfliktaufloesung und --amend: doch). Ein direkter
+                 # Skriptaufruf misst das nicht. Laeuft im unit-Job.
 Quell-Checks:    ./tests/source-invariants.sh   # §11, ohne HTTP, ohne Instanz
                  # Laufen im unit-Job, der NIE übersprungen wird. probe.sh delegiert
                  # in Sektion H mit --nested hierher. Einzige Kopie von
@@ -253,6 +262,7 @@ bevor der eigene Helper drankommt — **und die Fehlermeldung nennt den Grund ni
     wrangler deploy/versions upload aufrufen.
 3. 🔵 **ENTSCHEIDUNG — Autonomie-Grenze:**
    - Commit + Push auf **Feature-Branch**: erlaubt
+   - **Commit auf `main`: nie** — auch der, den niemand pusht
    - Push auf `main`: **nie**
    - PR öffnen: erlaubt
    - PR mergen: **nie** — Mensch approved
@@ -265,6 +275,46 @@ bevor der eigene Helper drankommt — **und die Fehlermeldung nennt den Grund ni
      Für Arbeit in mehreren Repos: **pro Repo ein eigener Lauf.** Die Alternative — der
      Mensch als Push-Knopf — war am 24.08. zweimal nötig und ist keine Dauerlösung.
      *(Der Guard zitiert diesen Paragraphen in seiner `cd`-Ablehnung.)*
+
+   ⚠️ **Die Commit-Zeile stand hier bis zum 01.09.2026 nicht** — die Liste nannte den
+   Commit nur in der **Erlaubnis** („Commit + Push auf Feature-Branch"), das Verbot
+   darunter nur den **Push**. Wer committen will, liest damit eine Erlaubnis und
+   findet kein Verbot; der Feature-Branch liest sich als der übliche Ort, nicht als
+   der einzige. Geschärft, nicht verdoppelt: eine zweite Formulierung an anderer
+   Stelle wäre die Fassung, die als erste veraltet.
+
+   Der zweite Grund ist struktureller und mit einer Regel nicht zu beheben: der
+   einzige Durchsetzer, den dieser Paragraph nennt, ist `.claude/hooks/guard-push.sh`
+   — und der sitzt am **Push**. Zu dem Zeitpunkt ist der Commit geschrieben. Er ist
+   zudem ein PreToolUse-Hook von Claude Code und feuert nur, wenn Claude Code das
+   Kommando ausführt; ein `git commit` aus dem Terminal läuft an ihm vorbei. Die
+   **Commit-Fläche war unbewacht**, bis `.githooks/pre-commit` sie am 01.09.2026
+   übernommen hat — der einzige Hook dieses Repos, der am Commit statt am Push
+   greift. Er lässt losgelösten HEAD und laufende Merge-, Rebase-, Cherry-Pick- und
+   Revert-Vorgänge ausdrücklich durch; die Gründe stehen dort.
+
+   ⚠️ **Der Anlass lag in den Nachbar-Repos, nicht hier.** Am 01.09.2026 landete
+   zweimal an einem Tag ein Commit direkt auf `main`: `2ae46bc` in
+   `growthkit-website`, `b14365c` in `supabase`. **Hier ist das seit dem
+   PR-Workflow nicht passiert** — gemessen, nicht angenommen: alle 34 Commits auf
+   `main` seit `13c2d12` (19.08.2026) sind Squash-Merges mit PR-Nummer, der letzte
+   Direkt-Commit `8b4d26d` stammt vom 07.08.2026. Der Hook ist hier **Vorsorge,
+   keine Reparatur**; in einem Repo, in dem `main` der Arbeitszweig ist, gehörte er
+   nicht hin.
+
+   Passiert es doch, in **genau dieser Reihenfolge**:
+
+   ```bash
+   git branch <name>              # ZUERST — rettet den Commit
+   git reset --hard origin/main   # dann erst zurücksetzen
+   git switch <name>
+   ```
+
+   ⚠️ **`reset` vor `branch` und der Commit ist weg.** `git reset --hard` bewegt
+   `main` auf `origin/main`; danach zeigt keine Referenz mehr auf den Commit, er ist
+   nur noch über `git reflog` erreichbar. `git branch` zuerst setzt eine Referenz,
+   die ihn hält. Dieselbe Reihenfolge steht in der Meldung des Hooks — sie steht
+   damit zweimal, und `tests/pre-commit.sh` vergleicht beide Stellen (§7a).
 4. **Keine DDL, keine SQL-Migrationen, kein `apply_migration`, kein `deploy_edge_function`.**
    Schema-Änderungen gehören ins `supabase`-Repo und brauchen einen Menschen. Wenn eine
    Änderung hier eine DB-Änderung erfordert: als Vorschlagsdatei ausgeben und stoppen.
@@ -1104,7 +1154,8 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | §7a-Ausnahme-Absatz | `growthkit-website` | hier PR #24 · in `supabase` |
 | Notausgang `enforce_admins` | `growthkit-website` | hier PR #24 · in `supabase` |
 
-**Offen — Stand 30.08.2026:**
+**Offen — Stand 30.08.2026, um die letzte Zeile am 01.09.2026 ergänzt (nur diese neu
+nachgesehen, die darüber unverändert übernommen):**
 
 | Gegenstand | Ursprung | Stand |
 |---|---|---|
@@ -1113,6 +1164,23 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | **§18b** (Falsifikations-Notation) | Teil 1 **hier**, Teil 2+3 `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
 | Falsifikations-**Pflicht** bei Leitplanke 18 | `growthkit-website` | hier seit 27.08. · `supabase` **fehlt** |
 | §18b **Rückweg** (Sicherung vor der Injektion) | **hier** (30.08.) | hier seit 30.08. · in **beiden** Nachbarn **fehlt** — nachgesehen, nicht angenommen |
+| **Commit-Verbot in §3 + Rettungsweg + Branch-Hälfte in `.githooks/pre-commit`** | `growthkit-website` PR #65, 01.09.2026 | hier mit diesem Commit · `supabase` **noch in keinem Commit** |
+
+⚠️ **Die Branch-Hälfte ist übernommen, nicht kopiert — die drei Vorbedingungen sind hier
+einzeln geprüft worden**, weil der Eintrag drüben ausdrücklich darum bittet („dort erst
+prüfen, ob `main` überhaupt geschützt ist, statt zu übernehmen"): `main` ist hier
+geschützt (01.09.2026 über die API nachgesehen: `enforce_admins` true, PR-Reviews
+verlangt, `strict` true) — der Hook ist damit die frühe, nicht die einzige Ebene, anders
+als in `chrome-extension`. `main` ist hier **nicht** der Arbeitszweig. Und die Regel
+stand schon da, nur ohne die Commit-Hälfte — deshalb geschärft statt danebengestellt.
+
+⚠️ **Zwei Angaben in der Tabelle drüben sind seit heute überholt, und keine davon ist
+von hier aus zu berichtigen** (§3, ein Lauf, ein Repo): `growthkit-website` führt für
+diesen Gegenstand „`mcp` und `supabase` fehlen". Für `mcp` erledigt dieser Commit das.
+Für `supabase` stimmte es schon vorher nicht ganz — dort liegen Hook-Änderung und Suite
+am 01.09.2026 **im Arbeitsbaum**, ungetrackt beziehungsweise ungecommittet. „Fehlt" und
+„vorhanden" sind beide falsch; deshalb steht in der Zeile oben, was tatsächlich gemessen
+wurde.
 
 ⚠️ **Der Rückweg-Handgriff gehört in beide Nachbar-Repos, und das ist gemessen:** dort steht
 §18b bereits, aber `grep -ciE "sicherungskopie|rückweg|checkout -- "` über beide `AGENTS.md`

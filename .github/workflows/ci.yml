@@ -52,7 +52,14 @@ jobs:
           bash -n tests/auth-paths.sh
           bash -n tests/authed-smoke.sh
           bash -n tests/guard-push.sh
+          bash -n tests/pre-commit.sh
           bash -n tests/deno-lint.sh
+          # ⚠️ .githooks/pre-commit steht mit, obwohl die Endung fehlt: git
+          # verlangt den Dateinamen `pre-commit`, nicht `pre-commit.sh`. Ein
+          # reiner tests/*.sh-Blick laesst ausgerechnet den Hook aus, der seit
+          # dem 01.09.2026 die Commit-Flaeche traegt (AGENTS.md §3) — und
+          # tests/pre-commit.sh fuehrt ihn aus, CI haengt also an ihm.
+          bash -n .githooks/pre-commit
 
       # Quellreine Invarianten (AGENTS.md §11): reine Funktionen des Checkouts —
       # kein HTTP, keine laufende Instanz, kein Workers Build. Deshalb HIER und
@@ -69,6 +76,18 @@ jobs:
       # selbst mit, haengt also nicht daran, welchen Branch actions/checkout
       # gerade ausgecheckt hat (push-Event: Branch, pull_request: detached HEAD).
       - run: bash tests/guard-push.sh
+
+      # Selbsttest des Commit-Guards, aus denselben Gruenden wie der Schritt
+      # darueber: kein HTTP, keine Instanz, kein Workers Build, und der unit-Job
+      # wird nie uebersprungen. Die Suite bringt ihre Wegwerf-Repos selbst mit
+      # und haengt nicht daran, welchen Branch actions/checkout gerade
+      # ausgecheckt hat — im pull_request-Fall ist das ein losgeloester HEAD,
+      # also ausgerechnet einer der Faelle, die der Hook durchlaesst.
+      #
+      # ⚠️ Sie ersetzt den gitleaks-Schritt weiter unten NICHT: sie schiebt
+      # einen STUB in den PATH und prueft die Branch-Haelfte samt Reihenfolge,
+      # nie einen echten Fund.
+      - run: bash tests/pre-commit.sh
 
       # ───────────────────────────────────────────────────────────────────────
       # LINT. Bis zum 30.08.2026 lief in diesem Repo KEIN Linter — weder in CI
