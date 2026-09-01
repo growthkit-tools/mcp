@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# pre-commit — gitleaks ueber die GESTAGTEN Aenderungen
+# pre-commit — ZWEI Pruefungen, in dieser Reihenfolge:
+#
+#   1. Steht HEAD auf einem geschuetzten Branch?  (AGENTS.md §3)
+#   2. gitleaks ueber die GESTAGTEN Aenderungen   (AGENTS.md "Secret-Scan")
+#
+# Die Branch-Pruefung steht ZUERST, und das ist keine Geschmacksfrage: sie kostet
+# Millisekunden, der Scan eine gute Sekunde. HIER gemessen am 01.09.2026, je
+# fuenf Durchlaeufe auf dieser Maschine: Abbruch auf `main` 13 ms (fuenfmal
+# derselbe Wert), `gitleaks protect --staged` 739-1151 ms. Wer auf `main`
+# committet, soll das sofort erfahren und nicht erst nach einem Scan, dessen
+# Ergebnis dann ohnehin verworfen wird — der Hook ist im ABLEHNUNGSFALL damit
+# rund achtzigmal schneller als vorher, nicht langsamer. Ein Hook, der spuerbar
+# bremst, wird umgangen.
 #
 # AKTIVIEREN (einmal je Clone, nicht automatisch):
 #   git config core.hooksPath .githooks
@@ -13,31 +25,131 @@
 # ⚠️ WARUM NICHT .claude/hooks/: das sind CLAUDE-CODE-Hooks (PreToolUse), keine
 # git-Hooks. Sie greifen an Werkzeugaufrufen und feuern nur, wenn Claude Code
 # das Kommando ausfuehrt. Ein `git commit` im Terminal oder aus dem Editor
-# laeuft an ihnen vorbei. Zwei Mechanismen, zwei Zeitpunkte — deshalb eine
-# eigene Datei und kein Anbau an .claude/hooks/guard-push.sh.
+# laeuft an ihnen vorbei. Und der einzige Guard, der dort liegt, sitzt am PUSH:
+# zu dem Zeitpunkt ist der Commit bereits geschrieben. Zwei Mechanismen, zwei
+# Zeitpunkte — deshalb eine eigene Datei und kein Anbau an
+# .claude/hooks/guard-push.sh.
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# DIESER HOOK IST DIE FRUEHE, NICHT DIE MASSGEBLICHE EBENE.
+# DIESER HOOK IST FUER BEIDE HAELFTEN DIE FRUEHE, NICHT DIE MASSGEBLICHE EBENE.
 #
-# Massgeblich ist der gitleaks-Schritt im Unit-Job (.github/workflows/ci.yml).
-# Der ist fail-closed, laeuft auf jedem PR und haengt an einem required status
-# check auf main. Dieser Hook faengt denselben Fund frueher, hat aber zwei
-# Loecher, die er nicht schliessen kann:
+# BRANCH-HAELFTE: massgeblich ist die Branch Protection auf `main` — am
+# 01.09.2026 fuer dieses Repo nachgesehen und nicht angenommen: enforce_admins
+# true, PR-Reviews verlangt, strict true, zwei required contexts. Ein Push auf
+# `main` scheitert hier also zuverlaessig, auch mit Admin-Credentials. Dieser
+# Hook ersetzt das nicht, er kommt ihm zuvor.
+# ⚠️ In einem Repo OHNE Protection waere derselbe Hook die einzige Ebene, und
+# dieser Absatz muesste das Gegenteil sagen. Wer ihn weiterreicht, sieht dort
+# nach, statt ihn mitzukopieren.
+#
+# SCAN-HAELFTE: massgeblich ist der gitleaks-Schritt im Unit-Job
+# (.github/workflows/ci.yml). Der ist fail-closed, laeuft auf jedem PR und
+# haengt an einem required status check auf main.
+#
+# BEIDEN HAELFTEN gemeinsam sind zwei Loecher, die dieser Hook nicht schliessen
+# kann:
 #
 #   * er laeuft nur, wo jemand core.hooksPath gesetzt hat
 #   * `git commit --no-verify` uebergeht ihn
 #
-# ⚠️ IN DIESEM REPO WIEGT DIE FRUEHE EBENE SCHWERER ALS NEBENAN. Das Repo ist
-# OEFFENTLICH: was einmal gepusht ist, war weltweit lesbar — auch wenn der
-# naechste Commit es wieder entfernt. GitHubs Push Protection greift erst beim
-# Push und mit engerem Regelsatz; sie kennt den `gk_`-Token dieses Repos nicht
-# (am 28.08.2026 gemessen, siehe .gitleaks.toml). Was dieser Hook hier abfaengt,
+# ⚠️ FUER DIE SCAN-HAELFTE WIEGT DIE FRUEHE EBENE HIER SCHWERER ALS NEBENAN. Das
+# Repo ist OEFFENTLICH: was einmal gepusht ist, war weltweit lesbar — auch wenn
+# der naechste Commit es wieder entfernt. GitHubs Push Protection greift erst
+# beim Push und mit engerem Regelsatz; sie kennt den `gk_`-Token dieses Repos
+# nicht (am 28.08.2026 gemessen, siehe .gitleaks.toml). Was dieser Hook abfaengt,
 # ist nie in einem Commit gewesen.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 CFG="$ROOT/.gitleaks.toml"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 1 · HEAD steht nicht auf einem geschuetzten Branch
+#
+# ⚠️ DER ANLASS LAG NICHT HIER — nachgesehen, nicht uebernommen. Am 01.09.2026
+# landete zweimal an einem Tag ein Commit direkt auf `main`: `2ae46bc` in
+# growthkit-website und `b14365c` in `supabase`. Beide Objekte existieren in
+# DIESEM Repo nicht (geprueft mit `git cat-file -t`). Und hier ist es seit dem
+# PR-Workflow auch nicht passiert: alle 34 Commits auf `main` seit `13c2d12`
+# (19.08.2026) sind Squash-Merges mit PR-Nummer, der letzte Direkt-Commit
+# `8b4d26d` stammt vom 07.08.2026 und damit aus der Zeit davor.
+#
+# Der Hook ist hier also VORSORGE, keine Reparatur. Uebernommen wird er
+# trotzdem, und zwar nicht aus Symmetrie: die Fehlerklasse haengt an git und an
+# der Gewohnheit, nicht an einem Repo — zwei Nachbarn am selben Tag sind der
+# Beleg. Ein Repo, in dem `main` der Arbeitszweig WAERE, bekaeme ihn nicht.
+#
+# ⚠️ WARUM DAS HIER STEHT UND NICHT IN .claude/hooks/. Dort liegt genau ein
+# Guard, `guard-push.sh`, und er sitzt am PUSH — zu dem Zeitpunkt ist der Commit
+# geschrieben und muss von `main` heruntergeholt werden. Ausserdem ist er ein
+# PreToolUse-Hook von Claude Code: ein `git commit` aus dem Terminal oder dem
+# Editor laeuft an ihm vorbei. Die COMMIT-Flaeche war bis heute unbewacht.
+#
+# Dieselbe Liste wie .claude/hooks/guard-push.sh. Sie steht damit zweimal —
+# unvermeidbar, weil die beiden Hooks verschiedene Mechanismen sind und keine
+# gemeinsame Datei lesen koennen, ohne dass ein fehlgeschlagenes `source` eine
+# LEERE Liste ergaebe, und eine leere Positivliste erlaubt alles (§18a d).
+# tests/pre-commit.sh vergleicht deshalb beide Vorkommen miteinander (§7a).
+PROTECTED='main master'
+
+# ⚠️ `--quiet` ist tragend, nicht Kosmetik. Bei losgeloestem HEAD schlaegt
+# `symbolic-ref` fehl; ohne `|| ZWEIG=''` traegt die Variable dann den
+# Fehlertext, und ohne `--quiet` steht er zusaetzlich auf stderr. Der naive
+# Vergleich `[ "$(git symbolic-ref --short HEAD)" = main ]` liefert bei
+# losgeloestem HEAD eine leere Zeichenkette, vergleicht sie mit `main`, findet
+# keine Uebereinstimmung — und laesst durch, OHNE dass jemand entschieden
+# haette, dass das richtig ist. Das ist §18a (c): die Pruefung verschwindet mit
+# ihrer Quelle und meldet dabei Erfolg.
+ZWEIG="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" || ZWEIG=''
+
+# Losgeloester HEAD: AUSDRUECKLICH erlaubt, nicht versehentlich.
+# Ein Commit ohne Branch bewegt `main` nicht — er haengt frei und ist genau das,
+# was `git branch <name>` unten rettet. Blockieren waere hier falsch: es traefe
+# jedes `git rebase`, jedes `git bisect` und jedes Nachsehen in einem alten
+# Stand.
+if [ -n "$ZWEIG" ]; then
+
+  # Laufende Mehrschritt-Vorgaenge: erlaubt.
+  #
+  # ⚠️ HIER GEMESSEN, nicht aus dem Nachbar-Repo geglaubt (01.09.2026,
+  # Wegwerf-Repo mit protokollierendem Hook): git fuehrt pre-commit fuer einen
+  # sauber durchlaufenden `git merge --no-ff` NICHT aus (zwei Aufrufe vorher,
+  # zwei nachher), wohl aber fuer den Commit, mit dem man einen KONFLIKT
+  # aufloest, und fuer `--amend`. Ohne diese Ausnahme blockierte der Hook also
+  # ausgerechnet die Konfliktaufloesung auf `main` — den Fall, in dem man am
+  # wenigsten gebrauchen kann, dass ein Hook dazwischengeht. Dasselbe gilt fuer
+  # cherry-pick, revert und ein Rebase, das anhaelt.
+  GITDIR="$(git rev-parse --git-dir)"
+  VORGANG=''
+  [ -e "$GITDIR/MERGE_HEAD" ]        && VORGANG='Merge'
+  [ -e "$GITDIR/CHERRY_PICK_HEAD" ]  && VORGANG='Cherry-Pick'
+  [ -e "$GITDIR/REVERT_HEAD" ]       && VORGANG='Revert'
+  [ -d "$GITDIR/rebase-merge" ]      && VORGANG='Rebase'
+  [ -d "$GITDIR/rebase-apply" ]      && VORGANG='Rebase'
+
+  if [ -z "$VORGANG" ]; then
+    for B in $PROTECTED; do
+      [ "$ZWEIG" = "$B" ] || continue
+      printf '\n\033[31m✗ pre-commit: HEAD steht auf '"'"'%s'"'"' — Commits gehoeren auf einen Branch.\033[0m\n' "$ZWEIG" >&2
+      printf '  AGENTS.md §3. Der Push wuerde es ohnehin fangen (Branch Protection, auch\n' >&2
+      printf '  fuer Admins), aber dann liegt der Commit schon auf '"'"'%s'"'"' und muss von dort\n' "$ZWEIG" >&2
+      printf '  heruntergeholt werden.\n\n' >&2
+      printf '  JETZT (der Commit ist noch nicht geschrieben) genuegt:\n' >&2
+      printf '    \033[1mgit switch -c <name>\033[0m\n\n' >&2
+      printf '  Ist er schon geschrieben, dann in GENAU DIESER Reihenfolge:\n' >&2
+      printf '    \033[1mgit branch <name>\033[0m              # ZUERST — rettet den Commit\n' >&2
+      printf '    \033[1mgit reset --hard origin/%s\033[0m   # dann erst zuruecksetzen\n' "$ZWEIG" >&2
+      printf '    \033[1mgit switch <name>\033[0m\n' >&2
+      printf '  \033[33m⚠ reset VOR branch und der Commit ist weg\033[0m — nichts zeigt mehr auf ihn.\n\n' >&2
+      printf '  Umgehen mit --no-verify ist moeglich; der Push nach '"'"'%s'"'"' scheitert trotzdem.\n' "$ZWEIG" >&2
+      exit 1
+    done
+  fi
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 2 · gitleaks
 
 # ⚠️ FEHLENDE KONFIG IST EIN FEHLER, KEIN GRUND ZUM UEBERSPRINGEN (§18a c).
 # Ohne sie liefe gitleaks mit dem nackten Standardsatz — also OHNE die
