@@ -36,7 +36,7 @@ jobs:
       # origin/main..HEAD liest. Mit der Standardtiefe 1 gaebe es keinen
       # merge-base und der Schritt waere nicht durchfuehrbar. Kostet bei 80
       # Commits nichts Messbares.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -261,7 +261,7 @@ jobs:
 
           exit $RC
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -312,7 +312,7 @@ jobs:
       skip:   ${{ steps.wait.outputs.skip }}
       target: ${{ steps.target.outputs.target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Auf Workers Build warten
         id: wait
@@ -482,7 +482,7 @@ jobs:
     needs: probe
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Das Fork-Gate steht auf STEP-Ebene, NICHT am Job. Stuende es am Job, wuerde
       # der ganze Job uebersprungen — einschliesslich der warnenden Steps darunter,
