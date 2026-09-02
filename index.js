@@ -68,6 +68,12 @@ const READ_ONLY_TOOLS = new Set([
   "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail", "discoverSimilar",
   "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
   "show_callable_leads",
+  // pipelineStatus/listLeadSignals lesen nur. pipelineRun NICHT — er schreibt und
+  // verbraucht Credits, in `reveal` (3/Lead, 13 mit Telefon) UND in `resolve`
+  // (1/Lead, enrich_company). Die frueher hier stehende Kurzform "nur reveal"
+  // stimmte nicht: schaetzeCredits() in _shared/pipeline-stages.ts gibt fuer
+  // resolve anzahl * 1 zurueck, und das Gate greift bei jeder Schaetzung > 0.
+  "pipelineStatus", "listLeadSignals",
   "getWorkingMemory", "listTasks", "getOpenTasks",
   "getSeoReport", "getAeoReport",
 ]);
@@ -1056,6 +1062,10 @@ export default {
     const EDGE_SEARCH_URL = `${env.SUPABASE_URL}/functions/v1/n8n-search`;
     const EDGE_PROXY_URL = `${env.SUPABASE_URL}/functions/v1/n8n-proxy`;
     const EDGE_SCORE_LEADS_URL   = `${env.SUPABASE_URL}/functions/v1/score-leads`;
+    // Qualifizierungskette. Wie score-leads: verify_jwt=false, aber die Function
+    // PRUEFT den N8N_AUTH_TOKEN-Bearer selbst — also ueber callEdge(), nicht wie
+    // die beiden History-Endpunkte weiter unten.
+    const EDGE_CAMPAIGN_PIPELINE_URL = `${env.SUPABASE_URL}/functions/v1/campaign-pipeline`;
     const EDGE_GET_TOP_LEADS_URL = `${env.SUPABASE_URL}/functions/v1/get-top-leads`;
     const EDGE_EMAIL_COMPOSE_URL = `${env.SUPABASE_URL}/functions/v1/email-compose`;
     // Weekly report history. NOTE: these two authenticate ONLY via body.user_token —
@@ -2498,6 +2508,51 @@ export default {
           },
         },
         {
+          name: "pipelineStatus",
+          title: "Pipeline: Status",
+          description: "Show where a campaign's leads stand in the qualification chain. Returns the funnel (how many leads have a domain, firmographics, a score, a signal, an email, a phone), how many candidates each stage currently has, and the top 10 leads by priority. Read-only, spends no credits. Call this FIRST whenever the user asks what to do with a campaign — the pending counts tell you which stage to run next. The gate_column field says which signal column the reveal gate uses; if it reads 'active_signals' the gate is softer than specified and weak signals still count.",
+          inputSchema: {
+            type: "object",
+            required: ["campaign_id"],
+            properties: {
+              campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." },
+            },
+          },
+        },
+        {
+          name: "pipelineRun",
+          title: "Pipeline: Run Stage",
+          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends 3 credits per lead (13 with with_phone) and resolve spends 1 per lead; score, signals and rescore spend none \u2014 so resolve needs confirm_credits too, not just reveal. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first. Never run this against a demo campaign; it is refused with 403.",
+          inputSchema: {
+            type: "object",
+            required: ["campaign_id", "stage"],
+            properties: {
+              campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." },
+              stage: { type: "string", enum: ["resolve", "score", "signals", "reveal", "rescore"], description: "resolve = find domain and firmographics. score = ICP fit. signals = why-now scan. reveal = persona, email and optionally phone (SPENDS CREDITS). rescore = second pass once seniority is known." },
+              limit: { type: "integer", description: "How many candidates to process. Default 10, max 25." },
+              min_score: { type: "integer", description: "Fit threshold for signals and reveal. Default 60." },
+              require_signal: { type: "boolean", description: "reveal only: require an active why-now signal. Default true. Setting this to false widens who gets contacted \u2014 ask the user before you do it." },
+              with_phone: { type: "boolean", description: "reveal only: also reveal a mobile number. Default false. A phone costs 10 credits per lead on top of the 3 for the email." },
+              dry_run: { type: "boolean", description: "true = report candidates and estimated_credits, change nothing. Always do this first." },
+              confirm_credits: { type: "integer", description: "Required for a paid stage when dry_run is false: the exact estimated_credits from the dry run. A mismatch is refused with 409 and a fresh number \u2014 the candidate set changed, so show the user the new figure instead of retrying with the old one." },
+            },
+          },
+        },
+        {
+          name: "listLeadSignals",
+          title: "Campaign: List Lead Signals",
+          description: "List the stored why-now signals for one lead or for a whole campaign: type (funding, hiring, leadership, acquisition, expansion, tech_change, inbound, other), the one-sentence signal, its source URL, the observed date and a confidence. Read-only. Every signal carries the source it was verified against \u2014 quote that URL when you use a signal in outreach, and never present a signal without its date.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              lead_id: { type: "string", description: "UUID of the LEAD (leads.id) \u2014 use the lead_id from pipelineStatus top_10. NOT the id returned by listCampaignLeads: that is the campaign-lead id, and passing it returns an empty list with no error. Either this or campaign_id." },
+              campaign_id: { type: "string", description: "All signals of a campaign (from listCampaigns). Either this or lead_id." },
+              active_only: { type: "boolean", description: "Only signals inside their TTL. Default true \u2014 an expired signal is not a reason to call." },
+              limit: { type: "integer", description: "Default 50, max 200." },
+            },
+          },
+        },
+        {
           name: "show_callable_leads",
           title: "☎ Show Callable Leads",
           description: "Render an interactive call card of leads that have a phone number, each with a ☎ Anrufen button. The HUMAN user clicks a button to place a click-to-call from their own verified caller ID. This tool ONLY displays the card — it never places a call itself, and there is no model-callable call tool (UWG § 7: calls are human-initiated only). Optionally scope to one campaign_id; omit it to aggregate all callable leads across the user's campaigns. Use when the user asks to see or call leads (e.g. \"zeig mir anrufbare Leads\", \"welche Leads kann ich anrufen\").",
@@ -2834,6 +2889,11 @@ export default {
           getCampaignLeadFields: ["admin", "team", "view"],
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
+          // Qualifizierungskette: Status und Signale sind Reads, der Lauf ist ein
+          // Write mit Credit-Verbrauch \u2014 deshalb kein "view".
+          pipelineStatus:        ["admin", "team", "view"],
+          listLeadSignals:       ["admin", "team", "view"],
+          pipelineRun:           ["admin", "team"],
           show_callable_leads:   ["admin", "team", "view"],
           // App-private call tool. Listed for admin/team (host hides it from the model
           // via _meta.ui.visibility:["app"] and proxies the iframe's tools/call). Not
@@ -2868,8 +2928,13 @@ export default {
           // Overwrites existing values
           "updateMemory", "restoreVersion", "setWorkingMemory", "updateCampaign",
           "updateCampaignLead", "updateTask", "crmUpdateDeal", "save_call_outcome",
-          // Irreversible real-world effects (e-mail dispatch, phone call)
+          // Irreversible real-world effects (e-mail dispatch, phone call, credits)
           "email_compose", "place_call",
+          // pipelineRun ueberschreibt Lead-Felder ueber update_campaign_lead UND
+          // gibt in reveal/resolve Credits aus. Beides faellt unter die Regel
+          // oben; ohne diesen Eintrag meldet tools/list destructiveHint:false
+          // fuer das einzige Tool dieses Servers, das Geld ausgibt.
+          "pipelineRun",
         ]);
         // External-API tools (CRM bridge, enrichment/discovery providers, e-mail
         // dispatch, telephony) — MCP openWorldHint: reaches beyond the workspace.
@@ -2880,6 +2945,11 @@ export default {
           "crmUpdateDeal", "crmGetDeal", "crmAddNote", "crmCreateActivity", "crmCheckConnection",
           "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail",
           "discoverSimilar", "email_compose", "place_call",
+          // pipelineRun ruft ueber campaign-pipeline die Provider (enrich_company,
+          // find_contacts, find_email, verify_email, reveal_phone) und die
+          // Websuche des Signal-Scanners — dieselbe Aussenwirkung wie die
+          // Enrichment-Tools darueber.
+          "pipelineRun",
         ]);
         const annotate = (t) => ({
           ...t,
@@ -2961,6 +3031,10 @@ export default {
           getCampaignLeadFields: ["admin", "team", "view"],
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
+          // Spiegel der Karte oben; in Sync halten.
+          pipelineStatus:        ["admin", "team", "view"],
+          listLeadSignals:       ["admin", "team", "view"],
+          pipelineRun:           ["admin", "team"],
           show_callable_leads:   ["admin", "team", "view"],
           // place_call is app-private: in tools/list with _meta.ui.visibility:["app"]
           // (host hides it from the model, proxies the iframe's tools/call). admin/team
@@ -3406,6 +3480,31 @@ if (name === "getChapterOverview") {
         // ── Lead Scoring (Phase 1b) — dedicated dispatch: payload shape differs
         //    from crmActions/enrichActions/toolConfig (no `provider`/`action`
         //    wrapper; Edge Function consumes flat body).
+        // \u2500\u2500 Qualifizierungskette \u2500 eigener Dispatch, gleiche Form wie das
+        //    Scoring-Paar: flacher Body, kein provider/action-Wrapper. Die Function
+        //    unterscheidet die beiden Tools ueber `action`, nicht ueber die URL.
+        if (name === "pipelineStatus" || name === "pipelineRun") {
+          // ⚠️ REIHENFOLGE IST DIE ROLLENGRENZE. `action` und `user_token` stehen
+          // NACH dem Spread, nicht davor. Andersherum entscheidet der Aufrufer:
+          // args wird nirgends gegen inputSchema validiert (dieser Worker kennt
+          // keine Schema-Validierung), also haette `pipelineStatus` mit
+          // {action:"run", stage:"reveal"} eine Stage gefahren — mit einem
+          // view-Token, an der Rollen-Map vorbei und ungemetert, weil
+          // pipelineStatus in READ_ONLY_TOOLS steht. tests/pipeline-tools.sh
+          // faehrt genau diesen Aufruf.
+          const payload = { ...args, user_token: userToken, action: name === "pipelineRun" ? "run" : "status" };
+          try {
+            const { data, ok } = await callEdge(EDGE_CAMPAIGN_PIPELINE_URL, payload);
+            return json({
+              jsonrpc: "2.0",
+              id,
+              result: { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok },
+            });
+          } catch (e) {
+            return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Pipeline error: " + e.message } });
+          }
+        }
+
         if (name === "scoreLeads" || name === "getTopLeads") {
           const url = name === "scoreLeads" ? EDGE_SCORE_LEADS_URL : EDGE_GET_TOP_LEADS_URL;
           const payload = { user_token: userToken, ...args };
@@ -3644,6 +3743,7 @@ if (name === "getChapterOverview") {
           getCampaign:           { url: EDGE_EMBED_URL, action: "get_campaign" },
           updateCampaign:        { url: EDGE_EMBED_URL, action: "update_campaign" },
           listCampaignLeads:     { url: EDGE_EMBED_URL, action: "list_campaign_leads" },
+          listLeadSignals:       { url: EDGE_EMBED_URL, action: "list_lead_signals" },
           getCampaignLeadFields: { url: EDGE_EMBED_URL, action: "get_campaign_lead_fields" },
           updateCampaignLead:    { url: EDGE_EMBED_URL, action: "update_campaign_lead" },
           // Working Memory tools → n8n-embed (clear / list_active not exposed)
@@ -3777,6 +3877,11 @@ if (name === "getChapterOverview") {
           if (args.limit) payload.limit = args.limit;
         } else if (name === "getCampaignLeadFields") {
           payload.campaign_id = args.campaign_id;
+        } else if (name === "listLeadSignals") {
+          if (args.lead_id) payload.lead_id = args.lead_id;
+          if (args.campaign_id) payload.campaign_id = args.campaign_id;
+          if (args.active_only !== undefined) payload.active_only = args.active_only;
+          if (args.limit) payload.limit = args.limit;
         }
         else if (name === "updateCampaignLead") {
           payload.lead_id = args.lead_id;
