@@ -545,6 +545,17 @@
   },
   {
     "meta": null,
+    "name": "listLeadSignals",
+    "props": [
+      "active_only",
+      "campaign_id",
+      "lead_id",
+      "limit"
+    ],
+    "required": []
+  },
+  {
+    "meta": null,
     "name": "listMemories",
     "props": [
       "limit",
@@ -579,6 +590,34 @@
     "name": "listTeam",
     "props": [],
     "required": []
+  },
+  {
+    "meta": null,
+    "name": "pipelineRun",
+    "props": [
+      "campaign_id",
+      "confirm_credits",
+      "dry_run",
+      "limit",
+      "min_score",
+      "require_signal",
+      "stage",
+      "with_phone"
+    ],
+    "required": [
+      "campaign_id",
+      "stage"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "pipelineStatus",
+    "props": [
+      "campaign_id"
+    ],
+    "required": [
+      "campaign_id"
+    ]
   },
   {
     "meta": {
