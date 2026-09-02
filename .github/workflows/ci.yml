@@ -53,6 +53,7 @@ jobs:
           bash -n tests/authed-smoke.sh
           bash -n tests/guard-push.sh
           bash -n tests/pre-commit.sh
+          bash -n tests/pipeline-tools.sh
           bash -n tests/deno-lint.sh
           # ⚠️ .githooks/pre-commit steht mit, obwohl die Endung fehlt: git
           # verlangt den Dateinamen `pre-commit`, nicht `pre-commit.sh`. Ein
@@ -320,6 +321,18 @@ jobs:
       # hier soll es den Job nicht rot machen. Siehe AGENTS.md, Werkzeuge-Block
       # und "Bekannte Fallen".
       - run: npx --no-install vitest run --passWithNoTests
+
+      # ───────────────────────────────────────────────────────────────────────
+      # ADAPTER-TESTS DER PIPELINE-TOOLS. Steht NACH `npm ci`, und das ist keine
+      # Kosmetik: die Suite startet eine echte `wrangler dev`-Instanz, und
+      # wrangler kommt aus den devDependencies (Leitplanke 6 — kein blankes npx).
+      #
+      # ⚠️ Sie ist der EINZIGE Schritt in diesem Repo, der Worker-Code ausfuehrt,
+      # ohne eine deployte Flaeche zu brauchen: `wrangler dev` gegen eine fake
+      # Supabase im selben Prozessbaum. Kein Netz nach draussen, keine Secrets,
+      # keine Produktionsdaten — deshalb laeuft sie hier im unit-Job, der nie
+      # uebersprungen wird, und nicht im probe-Job.
+      - run: bash tests/pipeline-tools.sh
 
   # ---------------------------------------------------------------------------
   probe:
