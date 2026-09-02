@@ -69,7 +69,10 @@ const READ_ONLY_TOOLS = new Set([
   "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
   "show_callable_leads",
   // pipelineStatus/listLeadSignals lesen nur. pipelineRun NICHT — er schreibt und
-  // verbraucht in Stage reveal Credits.
+  // verbraucht Credits, in `reveal` (3/Lead, 13 mit Telefon) UND in `resolve`
+  // (1/Lead, enrich_company). Die frueher hier stehende Kurzform "nur reveal"
+  // stimmte nicht: schaetzeCredits() in _shared/pipeline-stages.ts gibt fuer
+  // resolve anzahl * 1 zurueck, und das Gate greift bei jeder Schaetzung > 0.
   "pipelineStatus", "listLeadSignals",
   "getWorkingMemory", "listTasks", "getOpenTasks",
   "getSeoReport", "getAeoReport",
@@ -2519,7 +2522,7 @@ export default {
         {
           name: "pipelineRun",
           title: "Pipeline: Run Stage",
-          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends credits; the others do not. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first. Never run this against a demo campaign; it is refused with 403.",
+          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends 3 credits per lead (13 with with_phone) and resolve spends 1 per lead; score, signals and rescore spend none \u2014 so resolve needs confirm_credits too, not just reveal. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first. Never run this against a demo campaign; it is refused with 403.",
           inputSchema: {
             type: "object",
             required: ["campaign_id", "stage"],
@@ -2542,7 +2545,7 @@ export default {
           inputSchema: {
             type: "object",
             properties: {
-              lead_id: { type: "string", description: "A single campaign lead (UUID from listCampaignLeads). Either this or campaign_id." },
+              lead_id: { type: "string", description: "UUID of the LEAD (leads.id) \u2014 use the lead_id from pipelineStatus top_10. NOT the id returned by listCampaignLeads: that is the campaign-lead id, and passing it returns an empty list with no error. Either this or campaign_id." },
               campaign_id: { type: "string", description: "All signals of a campaign (from listCampaigns). Either this or lead_id." },
               active_only: { type: "boolean", description: "Only signals inside their TTL. Default true \u2014 an expired signal is not a reason to call." },
               limit: { type: "integer", description: "Default 50, max 200." },
@@ -2925,8 +2928,13 @@ export default {
           // Overwrites existing values
           "updateMemory", "restoreVersion", "setWorkingMemory", "updateCampaign",
           "updateCampaignLead", "updateTask", "crmUpdateDeal", "save_call_outcome",
-          // Irreversible real-world effects (e-mail dispatch, phone call)
+          // Irreversible real-world effects (e-mail dispatch, phone call, credits)
           "email_compose", "place_call",
+          // pipelineRun ueberschreibt Lead-Felder ueber update_campaign_lead UND
+          // gibt in reveal/resolve Credits aus. Beides faellt unter die Regel
+          // oben; ohne diesen Eintrag meldet tools/list destructiveHint:false
+          // fuer das einzige Tool dieses Servers, das Geld ausgibt.
+          "pipelineRun",
         ]);
         // External-API tools (CRM bridge, enrichment/discovery providers, e-mail
         // dispatch, telephony) — MCP openWorldHint: reaches beyond the workspace.
@@ -2937,6 +2945,11 @@ export default {
           "crmUpdateDeal", "crmGetDeal", "crmAddNote", "crmCreateActivity", "crmCheckConnection",
           "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail",
           "discoverSimilar", "email_compose", "place_call",
+          // pipelineRun ruft ueber campaign-pipeline die Provider (enrich_company,
+          // find_contacts, find_email, verify_email, reveal_phone) und die
+          // Websuche des Signal-Scanners — dieselbe Aussenwirkung wie die
+          // Enrichment-Tools darueber.
+          "pipelineRun",
         ]);
         const annotate = (t) => ({
           ...t,
@@ -3471,7 +3484,15 @@ if (name === "getChapterOverview") {
         //    Scoring-Paar: flacher Body, kein provider/action-Wrapper. Die Function
         //    unterscheidet die beiden Tools ueber `action`, nicht ueber die URL.
         if (name === "pipelineStatus" || name === "pipelineRun") {
-          const payload = { user_token: userToken, action: name === "pipelineRun" ? "run" : "status", ...args };
+          // ⚠️ REIHENFOLGE IST DIE ROLLENGRENZE. `action` und `user_token` stehen
+          // NACH dem Spread, nicht davor. Andersherum entscheidet der Aufrufer:
+          // args wird nirgends gegen inputSchema validiert (dieser Worker kennt
+          // keine Schema-Validierung), also haette `pipelineStatus` mit
+          // {action:"run", stage:"reveal"} eine Stage gefahren — mit einem
+          // view-Token, an der Rollen-Map vorbei und ungemetert, weil
+          // pipelineStatus in READ_ONLY_TOOLS steht. tests/pipeline-tools.sh
+          // faehrt genau diesen Aufruf.
+          const payload = { ...args, user_token: userToken, action: name === "pipelineRun" ? "run" : "status" };
           try {
             const { data, ok } = await callEdge(EDGE_CAMPAIGN_PIPELINE_URL, payload);
             return json({
