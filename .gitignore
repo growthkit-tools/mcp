@@ -28,7 +28,7 @@ specs/
 # .dev.vars" pruefbar falsch machen. Eigene Datei, reiner Token, kein KEY=VALUE.
 # Diese Zeile ist in der MUST_IGNORE-Liste von tests/source-invariants.sh —
 # entfernt sie jemand, wird der unit-Job rot.
-.gk-ci-token
+.gk-*-token
 
 # Node
 node_modules/
