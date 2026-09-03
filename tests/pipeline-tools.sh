@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# GrowthKit MCP Worker — Testtabelle fuer die drei Pipeline-Tools
-# (pipelineStatus, pipelineRun, listLeadSignals) aus specs/SPEC-lead-signals.md §6.
+# GrowthKit MCP Worker — Testtabelle fuer die ADAPTER-Schicht von tools/call:
+# die drei Pipeline-Tools aus specs/SPEC-lead-signals.md §6 (Abschnitte A-D) und
+# die Argument-Allowlist, die fuer ALLE Tools davorsteht (Abschnitt F).
 #
 #   bash tests/pipeline-tools.sh
 #   FAKE_MODE=wrap409 bash tests/pipeline-tools.sh    # Rotlauf, siehe Abschnitt C
+#
+# Der Dateiname bleibt `pipeline-tools.sh`, obwohl Abschnitt F ueber die drei
+# Tools hinausgeht: er steht in .github/workflows/ci.yml und in AGENTS.md, und
+# eine Umbenennung waere ein eigener Vorgang mit eigener Verifikation. Der
+# Gegenstand ist in beiden Faellen derselbe — was der Worker aus `arguments`
+# baut, bevor ein Handler es sieht.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # WAS HIER LAEUFT — UND WARUM NICHT GEGEN PRODUKTION.
@@ -143,17 +150,42 @@ const GATE_409 = {
   hint: "Erneut mit confirm_credits=30 aufrufen.",
 };
 
+// Antwort von update_campaign mit Scoring-Profil: n8n-embed gibt zurueck, was
+// der SCORER aus dem Block lesen wuerde — nicht, was geschickt wurde.
+const UPDATE_CAMPAIGN = {
+  success: true,
+  campaign: { id: "38fee505-00db-45ca-8f0a-101dcf5b12ab", name: "Q3-B2B-Sales-Pilot", status: "active", updated_at: "2026-09-03T08:00:00Z" },
+  scoring_profile: { industries: ["ERP"], geo: ["CH"], employees: { min: 50, max: 500, gate: false } },
+};
+
+// ⚠️ ECHTE ANTWORT, am 03.09.2026 ueber mcp.growthkit.tools mit dem view-Token
+// geholt (Axept Business Software, lead_id 25a68d58…): 1 Signal, acquisition,
+// observed 2026-08-27, confidence 0.8, source_label null — `cite` faellt
+// deshalb aus dem Host der source_url. Firmenname und UUIDs sind ersetzt, die
+// Form und `cite` sind woertlich uebernommen.
 const SIGNALE = {
   success: true, count: 1, active_only: true,
   signals: [{
     id: "00000000-0000-4000-8000-0000000000f1",
     lead_id: "00000000-0000-4000-8000-000000000011",
     campaign_id: "7ed61251-14c1-4017-976b-dece91f96ea3",
-    type: "funding", signal: "Series B announced", source_url: "https://example.invalid/news",
-    source_label: "example.invalid", observed_at: "2026-08-20", expires_at: "2026-11-18",
-    confidence: 0.8, provenance: "auto:tavily", company_name: "Lead C",
+    // type, Datum, TTL, confidence und `cite` sind die Werte der echten Antwort;
+    // ersetzt ist nur der Satz selbst und die Quell-URL (er nennt zwei reale
+    // Firmen). `source_label: null` ist ebenfalls echt — genau deshalb faellt
+    // `cite` aus dem Host der URL, und das ist der Pfad, der geprueft gehoert.
+    type: "acquisition", signal: "Uebernahme durch einen Netzbetreiber angekuendigt.",
+    source_url: "https://www.ad-hoc-news.invalid/wirtschaft/uebernahme/70011196",
+    source_label: null, observed_at: "2026-08-27", expires_at: "2027-02-23",
+    confidence: 0.8, provenance: "auto:lead-signals-enrich", company_name: "Lead C",
+    cite: "ad-hoc-news, 27. August 2026",
   }],
 };
+
+// Dieselbe Zeile mit lang=en. zitatDatum() setzt im Englischen KEIN Komma
+// zwischen Tag und Jahr ("August 27 2026") — woertlich aus _shared/signal-cite.ts,
+// nicht nachempfunden.
+const SIGNALE_EN = JSON.parse(JSON.stringify(SIGNALE));
+SIGNALE_EN.signals[0].cite = "ad-hoc-news, August 27 2026";
 
 createServer((req, res) => {
   let roh = "";
@@ -189,8 +221,32 @@ createServer((req, res) => {
       return sende(400, { error: "action must be 'status' or 'run'" });
     }
     if (req.url.startsWith("/functions/v1/n8n-embed")) {
-      if (body.action === "list_lead_signals") return sende(200, SIGNALE);
+      if (body.action === "list_lead_signals") {
+        // 404 statt leerer Liste — der Wortlaut stammt aus n8n-embed (#71).
+        // "0 Signale" und "diese ID gibt es nicht" sind zwei Befunde, und der
+        // Agent kann sie an einer leeren Liste nicht unterscheiden.
+        // ⚠️ Der Fake kennt GENAU die beiden IDs seiner Fixture und antwortet
+        // auf alles andere mit 404 — wie das Backend, das beide Tabellen fragt
+        // und erst dann aufgibt. Ein Praefix-Muster waere hier schiefgegangen:
+        // die anonymisierten Fixture-UUIDs beginnen selbst mit Nullen.
+        const BEKANNT = new Set([
+          "00000000-0000-4000-8000-000000000011",
+          "00000000-0000-4000-8000-0000000000a1",
+        ]);
+        const roh = body.lead_id ?? body.campaign_lead_id;
+        if (roh && !BEKANNT.has(roh)) {
+          return sende(404, {
+            error: `Keine Entitaet mit der UUID ${roh} gefunden — weder als leads.id noch als ` +
+              `campaign_leads.id in diesem Konto.`,
+          });
+        }
+        return sende(200, body.lang === "en" ? SIGNALE_EN : SIGNALE);
+      }
+      if (body.action === "update_campaign") return sende(200, UPDATE_CAMPAIGN);
       return sende(400, { error: `unerwartete action: ${body.action}` });
+    }
+    if (req.url.startsWith("/functions/v1/n8n-proxy")) {
+      return sende(200, { found: true, echo_params: body.params ?? null });
     }
     return sende(404, { error: `unerwarteter Pfad: ${req.url}` });
   });
@@ -414,7 +470,106 @@ P=$(letzte "/functions/v1/campaign-pipeline")
   || ko "ein mitgeschickter user_token gewinnt gegen den Bearer: $(echo "$P" | jq -r '.body.user_token')"
 
 # ═════════════════════════════════════════════════════════════════════════════
-sec "E · Selbstpruefung der Tabelle"
+sec "E · listLeadSignals — beide UUID-Formen, cite, Sprache, 404"
+
+# Die Entitaets-Aufloesung sitzt im Backend (#71); hier wird geprueft, dass der
+# Adapter beide Parameter ueberhaupt weiterreicht. Vor diesem Commit kam
+# `campaign_lead_id` nirgends an — live gegen Produktion nachgestellt:
+# n8n-embed antwortete "lead_id or campaign_id is required", weil der Worker den
+# Parameter gar nicht kannte.
+ruf "$TOK_TEAM" listLeadSignals '{"campaign_lead_id":"00000000-0000-4000-8000-0000000000a1"}' >/dev/null
+E=$(letzte "/functions/v1/n8n-embed")
+[ "$(echo "$E" | jq -r '.body.campaign_lead_id')" = "00000000-0000-4000-8000-0000000000a1" ] \
+  && ok "campaign_lead_id kommt beim Backend an" \
+  || ko "campaign_lead_id fehlt im Payload — der Aufruf laeuft ins 'lead_id or campaign_id is required'"
+
+R=$(ruf "$TOK_TEAM" listLeadSignals '{"lead_id":"00000000-0000-4000-8000-000000000011"}')
+S=$(echo "$R" | text)
+[ "$(echo "$S" | jq -r '.signals[0].cite')" = "ad-hoc-news, 27. August 2026" ] \
+  && ok "cite kommt woertlich beim Client an (Quelle + Datum, fertig formatiert)" \
+  || ko "cite fehlt oder ist veraendert: $(echo "$S" | jq -r '.signals[0].cite // "<nichts>"')"
+[ "$(echo "$S" | jq -r '.signals[0].type')" = "acquisition" ] && [ "$(echo "$S" | jq -r '.count')" = "1" ] \
+  && ok "Known Result Axept: 1 Signal, acquisition, 27.08." \
+  || ko "Known Result weicht ab: count=$(echo "$S" | jq -r '.count') type=$(echo "$S" | jq -r '.signals[0].type')"
+
+R=$(ruf "$TOK_TEAM" listLeadSignals '{"lead_id":"00000000-0000-4000-8000-000000000011","lang":"en"}')
+E=$(letzte "/functions/v1/n8n-embed")
+[ "$(echo "$E" | jq -r '.body.lang')" = "en" ] \
+  && ok "lang wird durchgereicht" || ko "lang kommt beim Backend nicht an"
+[ "$(echo "$R" | text | jq -r '.signals[0].cite')" = "ad-hoc-news, August 27 2026" ] \
+  && ok "GEGENRICHTUNG: mit lang=en kommt die englische Zitatform an" \
+  || ko "die Sprachvariante aendert nichts — dann belegt der Fall darueber nichts"
+
+# ⚠️ 404 DURCHREICHEN, NICHT IN 200 VERPACKEN. Derselbe Mechanismus wie beim 409
+# in Abschnitt C: der Rumpf allein traegt die Unterscheidung nicht, `isError` schon.
+R=$(ruf "$TOK_TEAM" listLeadSignals '{"lead_id":"00000000-0000-4000-8000-000000000000"}')
+[ "$(echo "$R" | jq -r '.result.isError')" = "true" ] \
+  && ok "Phantasie-UUID: 404 kommt als FEHLER an, nicht als leere Trefferliste" \
+  || ko "isError=$(echo "$R" | jq -r '.result.isError') — ein 404 wird als Erfolg gemeldet"
+buche "$(echo "$R" | jq -r '.result.isError')"
+echo "$R" | text | grep -q "Keine Entitaet mit der UUID" \
+  && ok "der Klartext des Backends ueberlebt die Weitergabe" || ko "die 404-Begruendung geht verloren"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "F · Allowlist gegen inputSchema — fuer ALLE Tools, im Dispatcher"
+
+# ⚠️ DER FALL AUS PR #37. Dort wurde er pro Tool geflickt (action/user_token nach
+# dem Spread); hier traegt ihn die Allowlist fuer alle 71 Tools. Deshalb prueft
+# dieser Abschnitt NICHT `action` — das faengt beides —, sondern `stage`: ein
+# Schluessel, den nur die Allowlist stoppen kann, weil kein Handler ihn kennt.
+ruf "$TOK_VIEW" pipelineStatus '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","action":"run","stage":"reveal","dry_run":false}' >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+if [ -z "$P" ]; then
+  ko "kein Aufruf protokolliert — der Allowlist-Fall hat nichts gemessen (§18a a)"
+else
+  [ "$(echo "$P" | jq -r 'has("body") and (.body|has("stage"))')" = "false" ] \
+    && ok "geschmuggeltes 'stage' erreicht das Backend NICHT (nicht in pipelineStatus.properties)" \
+    || ko "ESKALATION: 'stage' ist durchgekommen — die Allowlist greift nicht"
+  [ "$(echo "$P" | jq -r '.body | has("dry_run")')" = "false" ] \
+    && ok "geschmuggeltes 'dry_run' erreicht das Backend NICHT" \
+    || ko "'dry_run' ist durchgekommen"
+  [ "$(echo "$P" | jq -r '.body.action')" = "status" ] \
+    && ok "und die action bleibt status (Allowlist UND Payload-Reihenfolge, beide)" \
+    || ko "action=$(echo "$P" | jq -r '.body.action')"
+fi
+
+# Zweiter Zeuge, ohne Tool-eigene Absicherung: der Enrichment-Dispatch reicht
+# `params: { ...args }` unveraendert weiter. Hier ist die Allowlist die EINZIGE
+# Instanz zwischen Client und Provider.
+ruf "$TOK_TEAM" enrichCompany '{"name":"Axept Business Software","company_name":"alt","x_injected":1}' >/dev/null
+X=$(letzte "/functions/v1/n8n-proxy")
+if [ -z "$X" ]; then
+  ko "n8n-proxy wurde nicht gerufen — der zweite Allowlist-Zeuge misst nichts"
+else
+  [ "$(echo "$X" | jq -r '.body.params.name')" = "Axept Business Software" ] \
+    && ok "enrichCompany schickt 'name' — der Schluessel, den beide Provider lesen" \
+    || ko "enrichCompany schickt kein 'name': $(echo "$X" | jq -c '.body.params')"
+  [ "$(echo "$X" | jq -r '.body.params | has("company_name")')" = "false" ] \
+    && ok "das alte 'company_name' ist weg und wuerde als undeklarierter Key ohnehin verworfen" \
+    || ko "'company_name' geht weiter an den Provider, der es nicht liest"
+  [ "$(echo "$X" | jq -r '.body.params | has("x_injected")')" = "false" ] \
+    && ok "ein frei erfundener Schluessel erreicht n8n-proxy nicht" \
+    || ko "ein undeklarierter Schluessel ist bis zum Provider durchgelaufen"
+fi
+
+# GEGENPROBE: vollstaendige, korrekte Argumente muessen BYTE-IDENTISCH ankommen.
+# Ohne sie waere eine Allowlist, die zu viel wegwirft, in allen Faellen darueber
+# gruen — sie prueft ja nur Abwesenheit (§18a d).
+VOLL='{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"signals","limit":25,"min_score":70,"require_signal":false,"with_phone":true,"dry_run":true,"confirm_credits":0}'
+ruf "$TOK_TEAM" pipelineRun "$VOLL" >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+ANGEKOMMEN=$(echo "$P" | jq -cS '.body | del(.user_token, .action)')
+GESENDET=$(echo "$VOLL" | jq -cS '.')
+if [ "$ANGEKOMMEN" = "$GESENDET" ]; then
+  ok "acht deklarierte Argumente kommen byte-identisch an (nur user_token/action ergaenzt)"
+else
+  ko "die Allowlist veraendert korrekte Argumente:"
+  printf '        gesendet:   %s\n' "$GESENDET"
+  printf '        angekommen: %s\n' "$ANGEKOMMEN"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "G · Selbstpruefung der Tabelle"
 
 ANZ=$(wc -l < "$LOG" | tr -d ' ')
 [ "${ANZ:-0}" -gt 0 ] \
