@@ -2162,10 +2162,19 @@ export default {
         {
           name: "enrichCompany",
           title: "Enrich Company",
-          description: "Get company info by domain or name. Returns industry, employees, revenue, location, technologies.",
+          description: "Get company info by domain or name. Returns industry, employees, revenue, location, technologies. Prefer `domain` \u2014 it is unambiguous; a name matches whatever the provider thinks it means.",
           inputSchema: { type: "object", properties: {
             domain: { type: "string", description: "Company domain e.g. seeburger.de" },
-            company_name: { type: "string", description: "Company name (if domain unknown)." },
+            // ⚠️ HEISST `name`, NICHT `company_name`. Beide Provider-Zweige lesen
+            // `name` (n8n-proxy: apolloEnrichCompany und hunterCompanyEnrich
+            // destrukturieren `{ domain, name }`), und der Dispatch reicht die
+            // Argumente unveraendert als `params` weiter. Mit `company_name` kam
+            // beim Provider weder Domain noch Name an: ein Aufruf ohne Domain
+            // endete in "domain or company name is required" statt in
+            // Firmographics. Die anderen beiden Tools, die einen Firmennamen
+            // schicken (findContacts, findEmail), heissen `company` und stimmen
+            // mit ihrem Zweig ueberein — geprueft, nicht angenommen.
+            name: { type: "string", description: "Company name (if the domain is unknown), e.g. 'Seeburger AG'." },
           }},
         },
         {
@@ -2393,12 +2402,51 @@ export default {
         {
           name: "updateCampaign",
           title: "Campaign: Update",
-          description: "Update fields on an existing campaign. Pass only the fields to change.",
+          description: "Update fields on an existing campaign. Pass only the fields to change. Use `scoring` to give THIS campaign its own lead-scoring profile — without it the campaign is scored against the user's global ICP, which is wrong whenever the campaign targets a different market. A campaign with its own profile also re-scores automatically when the profile changes.",
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
             properties: {
               campaign_id: { type: "string", description: "ID of the campaign to update (from listCampaigns)." },
+              scoring: {
+                // type schliesst null ein, weil die Beschreibung darunter
+                // ausdruecklich `null` zum Loeschen anbietet und n8n-embed das
+                // auch so liest (`roh === null` -> icp_snapshot.scoring
+                // entfernen). Mit `type: "object"` allein waere der dokumentierte
+                // Weg fuer jeden schema-pruefenden Client unbenutzbar.
+                type: ["object", "null"],
+                description: "Lead-scoring profile for THIS campaign, merged into icp_snapshot.scoring (the rest of icp_snapshot is left alone). Fill it only from what the user told you — never from general knowledge or another campaign; a wrong profile scores every lead wrongly and the numbers look plausible either way. Set employees.gate=false when company size is context rather than a criterion ('no hard cut-off', 'roughly', 'kein Gate'): the dimension then counts neither toward the score nor toward completeness. Pass null to remove the profile and fall back to the global ICP. Rejected with scoring_invalid if it names none of industries/employees/geo/seniority.roles.",
+                properties: {
+                  industries: { type: "array", items: { type: "string" }, description: "Target industries, free text in the user's own words." },
+                  employees: {
+                    type: "object",
+                    description: "{ min, max, gate }. gate=true means a company outside the range is penalised; gate=false means the range is descriptive only.",
+                    properties: {
+                      min: { type: "integer" },
+                      max: { type: "integer" },
+                      gate: { type: "boolean" },
+                    },
+                  },
+                  geo: {
+                    type: ["array", "object"],
+                    items: { type: "string" },
+                    description: "ISO-3166-1 alpha-2 country codes. Two forms, both accepted: the plain list ['DE','AT','CH'], which is descriptive only, or { list: ['DE','AT'], gate: true } when a company outside the list should be penalised \u2014 same meaning as employees.gate. A plain list means gate=false.",
+                  },
+                  seniority: {
+                    type: "object",
+                    description: "{ roles: [string] } — job titles as the user names them, in their language. Common leadership synonyms (GF, CEO, Inhaber, Managing Director, …) are matched anyway and need not be listed.",
+                    properties: { roles: { type: "array", items: { type: "string" } } },
+                  },
+                  weights: {
+                    type: "object",
+                    description: "Optional {industry, employees, geo, seniority} overriding the default 35/25/20/20. A weight of 0 still counts toward completeness — use employees.gate=false to drop a dimension entirely.",
+                    properties: {
+                      industry: { type: "integer" }, employees: { type: "integer" },
+                      geo: { type: "integer" }, seniority: { type: "integer" },
+                    },
+                  },
+                },
+              },
               name: { type: "string", description: "Short campaign label, 3-200 chars." },
               offer: { type: "string", description: "The concrete CTA, NOT the product name. E.g. 'Free 30-day pilot'." },
               pain_hypothesis: { type: "string", description: "ONE sentence stating the specific pain this campaign assumes the persona has." },
@@ -2541,12 +2589,14 @@ export default {
         {
           name: "listLeadSignals",
           title: "Campaign: List Lead Signals",
-          description: "List the stored why-now signals for one lead or for a whole campaign: type (funding, hiring, leadership, acquisition, expansion, tech_change, inbound, other), the one-sentence signal, its source URL, the observed date and a confidence. Read-only. Every signal carries the source it was verified against \u2014 quote that URL when you use a signal in outreach, and never present a signal without its date.",
+          description: "List the stored why-now signals for one lead or for a whole campaign: type (funding, hiring, leadership, acquisition, expansion, tech_change, inbound, other), the one-sentence signal, its source URL, the observed date, a confidence, and `cite`. Read-only. When you use a signal in outreach, use `cite` VERBATIM as the source line \u2014 it is already formatted for the reader (\"ad-hoc-news, 27. August 2026\"). Never write \"observed\", \"observed_at\" or \"as observed on\": those are field names from our data model, not words a prospect should read. Never present a signal without its source and date.",
           inputSchema: {
             type: "object",
             properties: {
-              lead_id: { type: "string", description: "UUID of the LEAD (leads.id) \u2014 use the lead_id from pipelineStatus top_10. NOT the id returned by listCampaignLeads: that is the campaign-lead id, and passing it returns an empty list with no error. Either this or campaign_id." },
-              campaign_id: { type: "string", description: "All signals of a campaign (from listCampaigns). Either this or lead_id." },
+              lead_id: { type: "string", description: "UUID of the LEAD (leads.id), e.g. from pipelineStatus top_10. Either this, campaign_lead_id or campaign_id. Mixing the two lead UUIDs up is no longer a trap: whichever you pass is resolved to the right entity, and an unknown UUID returns 404 with an explanation instead of an empty list." },
+              campaign_lead_id: { type: "string", description: "UUID of the CAMPAIGN MEMBERSHIP (campaign_leads.id) \u2014 the id from listCampaignLeads or from the pipelineRun candidate list. Resolves to the same signals as lead_id." },
+              lang: { type: "string", enum: ["de", "en"], description: "Language of the `cite` line. Default de." },
+              campaign_id: { type: "string", description: "All signals of a campaign (from listCampaigns). Either this or one of the lead UUIDs." },
               active_only: { type: "boolean", description: "Only signals inside their TTL. Default true \u2014 an expired signal is not a reason to call." },
               limit: { type: "integer", description: "Default 50, max 200." },
             },
@@ -2978,8 +3028,6 @@ export default {
       // -------------------------------------------------------
       if (method === "tools/call") {
         const { name, arguments: args = {} } = params;
-
-        // Permission guard
         const toolPermissions = {
           embedMemory: ["admin", "team"], searchMemory: ["admin", "team", "view"],
           listMemories: ["admin", "team", "view"], updateMemory: ["admin", "team"],
@@ -3865,6 +3913,7 @@ if (name === "getChapterOverview") {
         } else if (name === "getCampaign") {
           payload.campaign_id = args.campaign_id;
         } else if (name === "updateCampaign") {
+          if (args.scoring !== undefined) payload.scoring = args.scoring;
           payload.campaign_id = args.campaign_id;
           const fields = ["name", "description", "offer", "pain_hypothesis", "messaging_angle",
                           "channels", "start_date", "end_date", "success_metric", "status",
@@ -3879,7 +3928,9 @@ if (name === "getChapterOverview") {
           payload.campaign_id = args.campaign_id;
         } else if (name === "listLeadSignals") {
           if (args.lead_id) payload.lead_id = args.lead_id;
+          if (args.campaign_lead_id) payload.campaign_lead_id = args.campaign_lead_id;
           if (args.campaign_id) payload.campaign_id = args.campaign_id;
+          if (args.lang) payload.lang = args.lang;
           if (args.active_only !== undefined) payload.active_only = args.active_only;
           if (args.limit) payload.limit = args.limit;
         }

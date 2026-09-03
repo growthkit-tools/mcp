@@ -367,8 +367,8 @@
     "meta": null,
     "name": "enrichCompany",
     "props": [
-      "company_name",
-      "domain"
+      "domain",
+      "name"
     ],
     "required": []
   },
@@ -549,6 +549,8 @@
     "props": [
       "active_only",
       "campaign_id",
+      "campaign_lead_id",
+      "lang",
       "lead_id",
       "limit"
     ],
@@ -776,6 +778,7 @@
       "pain_hypothesis",
       "persona_snapshot",
       "product_snapshot",
+      "scoring",
       "start_date",
       "status",
       "success_metric"
