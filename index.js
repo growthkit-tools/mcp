@@ -1545,7 +1545,20 @@ export default {
       // -------------------------------------------------------
       // tools/list
       // -------------------------------------------------------
-      if (method === "tools/list") {
+      // ⚠️ DIESER BLOCK LAEUFT AUCH FUER tools/call, und dann nur bis zur
+      // Schluessel-Map unten. Grund: `allTools` ist die EINZIGE Stelle, an der
+      // steht, welche Argumente ein Tool hat — und die Allowlist in tools/call
+      // braucht genau das. Die Alternative waere eine zweite Liste der Keys
+      // gewesen, also eine Synchronisationspflicht ueber 71 Tools (§7a).
+      //
+      // Das `katalog:`-Label ist kein Stilexperiment, sondern der Preis dafuer,
+      // dass der Diff lesbar bleibt (§22): der Rest dieses Blocks — Rollenfilter,
+      // Annotations, Demo-Allowlist, rund 145 Zeilen — gilt nur fuer tools/list
+      // und muesste sonst eingerueckt werden, was jede Zeile davon im Diff
+      // anfassen wuerde. `break katalog` verlaesst den Block, ohne aus fetch()
+      // zurueckzukehren.
+      let TOOL_ARG_KEYS = null;
+      katalog: if (method === "tools/list" || method === "tools/call") {
         const CHAPTERS_INSTRUCTION =
           "IMPORTANT \u2014 Chapter System: Every memory MUST be classified into exactly one chapter via metadata.chapter. " +
           "Available chapters: icp, strategy, campaigns, analytics, brand, competitors, learnings, general, pipeline, signals, playbook. " +
@@ -2878,6 +2891,20 @@ export default {
           },
         ];
 
+        // Die Allowlist-Quelle: Toolname -> Set der deklarierten Property-Keys.
+        // Ein Tool OHNE `properties` bekommt ein leeres Set und damit keine
+        // Argumente — das ist die richtige Lesart, nicht eine Luecke: fuenf Tools
+        // (getChapterOverview, listTeam, checkNotifications, crmGetPipelines,
+        // crmCheckConnection) deklarieren bewusst keine, und kein Handler liest
+        // dort etwas. Gemessen, nicht angenommen: ein Abgleich aller `args.X` im
+        // Quelltext gegen alle deklarierten Properties hatte am 03.09.2026 genau
+        // zwei Ausreisser — `scoring` und `lang` —, und beide sind die an diesem
+        // Tag hinzugekommenen Properties.
+        TOOL_ARG_KEYS = new Map(
+          allTools.map(t => [t.name, new Set(Object.keys(t.inputSchema?.properties ?? {}))])
+        );
+        if (method !== "tools/list") break katalog;
+
         // Role-based tool filtering
         const toolRoleMap = {
           embedMemory: ["admin", "team"],
@@ -3027,7 +3054,34 @@ export default {
       // tools/call — DIRECT EDGE FUNCTION CALLS
       // -------------------------------------------------------
       if (method === "tools/call") {
-        const { name, arguments: args = {} } = params;
+        const { name, arguments: rohArgs = {} } = params;
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ALLOWLIST GEGEN inputSchema — fuer ALLE Tools, VOR jedem Handler.
+        //
+        // Was nicht in `inputSchema.properties` steht, wird verworfen, bevor
+        // irgendein Payload gebaut wird. Der Anlass steht in PR #37: ein
+        // view-Token konnte ueber `pipelineStatus` ein `action:"run"` in den
+        // Body schmuggeln, weil der Dispatch `...args` spreadet und dieser
+        // Worker Argumente nirgends gegen das Schema prueft. Dort ist es pro
+        // Tool geflickt worden — hier ist es die Regel: 71 Tools, ein Ort.
+        //
+        // ⚠️ NUR DIE OBERSTE EBENE. Verschachtelte Objekte (`updates`,
+        // `scoring`, `filters`, `seed`) gehen unveraendert durch; ihre Form
+        // prueft das Backend. Ein Schema-Validator waere etwas anderes und
+        // gehoert nicht in einen Dispatcher.
+        //
+        // ⚠️ STILL VERWERFEN, nicht ablehnen. Ein Client, der ein Feld zu viel
+        // schickt, bekommt weiterhin sein Ergebnis — ein 400 wuerde bestehende
+        // Aufrufe brechen, und der Zweck ist, dass nichts Undeklariertes das
+        // Backend erreicht, nicht Erziehung des Clients.
+        const erlaubteKeys = TOOL_ARG_KEYS ? TOOL_ARG_KEYS.get(name) : null;
+        const args = erlaubteKeys
+          ? Object.fromEntries(Object.entries(rohArgs).filter(([k]) => erlaubteKeys.has(k)))
+          : rohArgs;
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Permission guard
         const toolPermissions = {
           embedMemory: ["admin", "team"], searchMemory: ["admin", "team", "view"],
           listMemories: ["admin", "team", "view"], updateMemory: ["admin", "team"],
