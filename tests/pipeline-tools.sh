@@ -181,11 +181,19 @@ const SIGNALE = {
   }],
 };
 
-// Dieselbe Zeile mit lang=en. zitatDatum() setzt im Englischen KEIN Komma
-// zwischen Tag und Jahr ("August 27 2026") — woertlich aus _shared/signal-cite.ts,
-// nicht nachempfunden.
+// Dieselbe Zeile mit lang=en, am 03.09.2026 gegen die Preview-Version geholt:
+// "ad-hoc-news, Aug 27 2026". Zwei Eigenheiten, beide echt und beide leicht
+// falsch zu raten: MONATE_EN traegt ABGEKUERZTE Namen ("Aug", nicht "August"),
+// und zwischen Tag und Jahr steht kein Komma.
+//
+// ⚠️ Genau das stand hier zuerst falsch. Der Wert war aus der Formatzeile in
+// _shared/signal-cite.ts abgeleitet (`${MONATE_EN[i]} ${tag} ${jahr}`) — die
+// Form stimmte, der Inhalt des Arrays war nie nachgesehen. Die Suite war damit
+// gruen gegen eine Erwartung, die das Backend nie erfuellt haette; aufgefallen
+// erst am Live-Aufruf gegen die Preview. Eine Fixture ist erst dann aus einer
+// echten Antwort, wenn die echte Antwort daneben lag.
 const SIGNALE_EN = JSON.parse(JSON.stringify(SIGNALE));
-SIGNALE_EN.signals[0].cite = "ad-hoc-news, August 27 2026";
+SIGNALE_EN.signals[0].cite = "ad-hoc-news, Aug 27 2026";
 
 createServer((req, res) => {
   let roh = "";
@@ -496,7 +504,7 @@ R=$(ruf "$TOK_TEAM" listLeadSignals '{"lead_id":"00000000-0000-4000-8000-0000000
 E=$(letzte "/functions/v1/n8n-embed")
 [ "$(echo "$E" | jq -r '.body.lang')" = "en" ] \
   && ok "lang wird durchgereicht" || ko "lang kommt beim Backend nicht an"
-[ "$(echo "$R" | text | jq -r '.signals[0].cite')" = "ad-hoc-news, August 27 2026" ] \
+[ "$(echo "$R" | text | jq -r '.signals[0].cite')" = "ad-hoc-news, Aug 27 2026" ] \
   && ok "GEGENRICHTUNG: mit lang=en kommt die englische Zitatform an" \
   || ko "die Sprachvariante aendert nichts — dann belegt der Fall darueber nichts"
 
