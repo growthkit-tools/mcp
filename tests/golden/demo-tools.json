@@ -1,0 +1,20 @@
+{
+  "count": 15,
+  "tools": [
+    "countMemories",
+    "getCampaign",
+    "getCampaignLeadFields",
+    "getChapterOverview",
+    "getDocument",
+    "getHistory",
+    "getWorkingMemory",
+    "listCampaignLeads",
+    "listCampaigns",
+    "listDeleted",
+    "listDocuments",
+    "listMemories",
+    "listReminders",
+    "listTeam",
+    "searchMemory"
+  ]
+}

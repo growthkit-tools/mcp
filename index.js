@@ -2175,7 +2175,7 @@ export default {
         {
           name: "enrichCompany",
           title: "Enrich Company",
-          description: "Get company info by domain or name. Returns industry, employees, revenue, location, technologies. Prefer `domain` \u2014 it is unambiguous; a name matches whatever the provider thinks it means.",
+          description: "Get company info by domain or name. Returns industry, employees, revenue, location, technologies. Prefer `domain` \u2014 it is unambiguous; a name matches whatever the provider thinks it means. `domain_unresolved` is not a provider failure \u2014 no provider was called and no credit was spent. The reply carries `candidates` (up to five domains with titles): offer them to the user, or pass `country` / `industry` as hints and try again.",
           inputSchema: { type: "object", properties: {
             domain: { type: "string", description: "Company domain e.g. seeburger.de" },
             // ⚠️ HEISST `name`, NICHT `company_name`. Beide Provider-Zweige lesen
@@ -2188,6 +2188,23 @@ export default {
             // schicken (findContacts, findEmail), heissen `company` und stimmen
             // mit ihrem Zweig ueberein — geprueft, nicht angenommen.
             name: { type: "string", description: "Company name (if the domain is unknown), e.g. 'Seeburger AG'." },
+            // ⚠️ DEPRECATED ALIAS, ABSICHTLICH STEHENGELASSEN. Bis zum 03.09.2026
+            // hiess der Parameter `company_name`; Clients cachen Tool-Listen und
+            // schicken den alten Namen noch Wochen weiter. Ohne diesen Eintrag
+            // wuerde die Allowlist aus #38 ihn stumm verwerfen — der Aufruf
+            // kaeme dann ohne Namen an und liefe in "domain or company name is
+            // required". Der Dispatch bildet ihn auf `name` ab; `name` gewinnt,
+            // wenn beide gesetzt sind.
+            company_name: { type: "string", description: "DEPRECATED — use `name`. Accepted as an alias for one more release so cached tool lists keep working; if both are given, `name` wins." },
+            // Hinweise fuer Stufe 0 (Domain aus dem Namen aufloesen). Sie sind
+            // der Grund, aus dem die Empfehlung in der Beschreibung ueberhaupt
+            // befolgbar ist: n8n-proxy liest `params.country` und
+            // `params.industry` und reicht sie an `loeseDomainAuf` weiter. Ohne
+            // die beiden Properties verwirft die Allowlist sie, und "Land oder
+            // Branche angeben, dann erneut" waere ein Rat, den niemand
+            // ausfuehren kann.
+            country: { type: "string", description: "Optional hint for resolving the domain from the name: country name or ISO code, e.g. 'CH'. Only used when `domain` is absent." },
+            industry: { type: "string", description: "Optional hint for resolving the domain from the name, e.g. 'ERP software'. Only used when `domain` is absent." },
           }},
         },
         {
@@ -2589,12 +2606,20 @@ export default {
             required: ["campaign_id", "stage"],
             properties: {
               campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." },
-              stage: { type: "string", enum: ["resolve", "score", "signals", "reveal", "rescore"], description: "resolve = find domain and firmographics. score = ICP fit. signals = why-now scan. reveal = persona, email and optionally phone (SPENDS CREDITS). rescore = second pass once seniority is known." },
+              stage: { type: "string", enum: ["resolve", "score", "signals", "reveal", "rescore"], description: "resolve = find domain and firmographics. score = ICP fit. signals = why-now scan. reveal = persona, email and optionally phone (SPENDS CREDITS). rescore = second pass once seniority is known. Map user language: Firmendaten vervollstaendigen/ergaenzen/anreichern or complete company data = resolve; bewerten/priorisieren/einordnen or score/rank = score, use rescore if the campaign was scored before; Anlaesse/Signale/Trigger/Why-now suchen or find triggers = signals; Ansprechpartner/Kontakte finden, E-Mail/Telefon ermitteln or find contacts = reveal" },
               limit: { type: "integer", description: "How many candidates to process. Default 10, max 25." },
               min_score: { type: "integer", description: "Fit threshold for signals and reveal. Default 60." },
               require_signal: { type: "boolean", description: "reveal only: require an active why-now signal. Default true. Setting this to false widens who gets contacted \u2014 ask the user before you do it." },
               with_phone: { type: "boolean", description: "reveal only: also reveal a mobile number. Default false. A phone costs 10 credits per lead on top of the 3 for the email." },
               dry_run: { type: "boolean", description: "true = report candidates and estimated_credits, change nothing. Always do this first." },
+              // ⚠️ OHNE DIESE PROPERTY WAR DIE SPRACHE NICHT EINSTELLBAR.
+              // campaign-pipeline liest `body.lang` und reicht es an
+              // lead-signals-enrich weiter (Default "de"); die Allowlist aus
+              // #38 verwirft aber jeden Schluessel, der hier nicht steht. Ein
+              // Client konnte die Sprache also nicht setzen, und die Signale
+              // waren immer deutsch — unabhaengig davon, in welcher Sprache
+              // der Nutzer arbeitet.
+              lang: { type: "string", enum: ["de", "en"], description: "Language for the signal sentences written by the `signals` stage. Default de. Other stages ignore it." },
               confirm_credits: { type: "integer", description: "Required for a paid stage when dry_run is false: the exact estimated_credits from the dry run. A mismatch is refused with 409 and a fresh number \u2014 the candidate set changed, so show the user the new figure instead of retrying with the old one." },
             },
           },
@@ -3481,11 +3506,21 @@ if (name === "getChapterOverview") {
         };
 
         if (enrichActions[name]) {
+          // Deprecated-Alias aufloesen, bevor der Payload gebaut wird. Beide
+          // Provider-Zweige lesen `name`; `company_name` ist nur noch der
+          // Name, den gecachte Tool-Listen schicken. `name` gewinnt, damit ein
+          // Client, der beides mitschickt, nicht vom aelteren Wert ueberholt
+          // wird.
+          const enrichArgs = { ...args };
+          if (enrichArgs.company_name !== undefined) {
+            if (enrichArgs.name === undefined) enrichArgs.name = enrichArgs.company_name;
+            delete enrichArgs.company_name;
+          }
           const enrichPayload = {
             user_token: userToken,
             provider: "enrichment",
             action: enrichActions[name],
-            params: { ...args },
+            params: enrichArgs,
           };
 
           try {

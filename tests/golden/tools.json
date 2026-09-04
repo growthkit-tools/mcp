@@ -367,7 +367,10 @@
     "meta": null,
     "name": "enrichCompany",
     "props": [
+      "company_name",
+      "country",
       "domain",
+      "industry",
       "name"
     ],
     "required": []
@@ -600,6 +603,7 @@
       "campaign_id",
       "confirm_credits",
       "dry_run",
+      "lang",
       "limit",
       "min_score",
       "require_signal",
