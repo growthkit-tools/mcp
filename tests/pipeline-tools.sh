@@ -118,6 +118,25 @@ const STATUS_Q3 = {
     signals_scanned: 0, active_signal: 3, email: 34, phone: 1, max_score: 55,
   },
   pending: { resolve: 29, score: 0, signals: 0, reveal: 0, rescore: 33 },
+  // ⚠️ FORM AUS DEM CODE VON supabase#76, NICHT AUS EINER LIVE-ANTWORT — der PR
+  // ist am 04.09.2026 noch offen, Produktion liefert diese Felder nicht (heute
+  // nachgemessen: pipelineStatus hat campaign_id, campaign_name, funnel,
+  // gate_column, pending, scoring_source, top_10 und sonst nichts). Die Labels
+  // stehen woertlich in STAGE_LABELS, die Zaehler passen zu den gemessenen
+  // Q3-Zahlen. Nach dem Merge von #76 gehoeren sie gegen die echte Antwort
+  // nachgezogen.
+  stages: [
+    { stage: "resolve", pending: 29, label_de: "Firmendaten vervollständigen", label_en: "Complete company data" },
+    { stage: "score",   pending: 0,  label_de: "Firmen bewerten",              label_en: "Score companies" },
+    { stage: "signals", pending: 0,  label_de: "Anlässe suchen",               label_en: "Find timing signals" },
+    { stage: "reveal",  pending: 0,  label_de: "Ansprechpartner finden",       label_en: "Find contacts" },
+    { stage: "rescore", pending: 33, label_de: "neu bewerten",                 label_en: "Re-score" },
+  ],
+  contacts: {
+    passend: 2, andere_rolle: 31, fehlt: 1,
+    label_de: "Ansprechpartner: passend / vorhanden, aber andere Rolle / fehlt",
+    label_en: "Contact: matches persona / present but different role / missing",
+  },
   top_10: [
     { lead_id: "00000000-0000-4000-8000-000000000001", company_name: "Lead A", priority_rank: 1, score: 55, active_signals: 1, has_email: true },
     { lead_id: "00000000-0000-4000-8000-000000000002", company_name: "Lead B", priority_rank: 2, score: 42, active_signals: 1, has_email: true },
@@ -144,6 +163,26 @@ const DRY_SIGNALS_MEDTECH = {
 // Das mechanische Credit-Gate, Wortlaut aus _shared/pipeline-stages.ts:
 // pruefeCreditGate("reveal", 30, undefined, 10) — derselbe Fall, den supabase#61
 // als Rotlauf protokolliert.
+// `signals` auf Q3: null Kandidaten, deshalb `why_zero`. Zaehler und Satz sind
+// nach der Regel aus pipeline-why.ts (#76) aus den GEMESSENEN Q3-Zahlen gebildet
+// — 34 View-Zeilen, keine ueber dem Fit-Gate, keine kuerzlich gescannt.
+// ⚠️ `why_zero` erscheint NUR bei null Kandidaten; die MedTech-Fixture oben hat
+// vier und traegt es deshalb nicht. Beide Faelle stehen in Abschnitt I.
+const DRY_SIGNALS_Q3 = {
+  dry_run: true,
+  stage: "signals",
+  gate_column: "strong_signals",
+  candidates: [],
+  candidate_count: 0,
+  total_pending: 0,
+  estimated_credits: 0,
+  why_zero: {
+    counts: { kein_fit_gate: 34, kuerzlich_gescannt: 0 },
+    de: "34 sind nicht über dem Fit-Gate",
+    en: "34 are below the fit gate",
+  },
+};
+
 const GATE_409 = {
   stage: "reveal", candidates: 10, estimated_credits: 30,
   error: "confirm_credits required",
@@ -195,6 +234,33 @@ const SIGNALE = {
 const SIGNALE_EN = JSON.parse(JSON.stringify(SIGNALE));
 SIGNALE_EN.signals[0].cite = "ad-hoc-news, Aug 27 2026";
 
+// list_campaign_leads, beide Formen. Neun Schluessel je Zeile — nicht sieben:
+// die Projektion in #76 traegt zusaetzlich `id` und `lifecycle_stage`. Gezaehlt
+// im Quelltext des offenen PR, nicht geschaetzt.
+const LEADS_COMPACT = {
+  success: true,
+  fields: "compact",
+  hint: "compact view; pass fields:'full' for complete records",
+  leads: [{
+    id: "00000000-0000-4000-8000-0000000000a1",
+    company_name: "Lead A", company_domain: "lead-a.invalid",
+    score: 55, fit_gate: false, strong_signals: 1,
+    has_email: true, has_phone: false, lifecycle_stage: "enriched",
+  }],
+};
+const LEADS_FULL = {
+  success: true,
+  leads: [{
+    id: "00000000-0000-4000-8000-0000000000a1",
+    call_count: 0, last_call_at: null, last_call_status: null,
+    lifecycle_stage: "enriched", score: 55, completeness: 0.36, metadata: {},
+    created_at: "2026-08-01T00:00:00Z",
+    company_name: "Lead A", company_domain: "lead-a.invalid", company_industry: "Software",
+    contact_name: "A. Muster", contact_email: "a@lead-a.invalid", contact_role: "CEO",
+    contact_phone: null, phone_status: null, phone_source: null, enrichment_status: "enriched",
+  }],
+};
+
 createServer((req, res) => {
   let roh = "";
   req.on("data", (c) => (roh += c));
@@ -216,7 +282,10 @@ createServer((req, res) => {
     if (req.url.startsWith("/functions/v1/campaign-pipeline")) {
       if (body.action === "status") return sende(200, STATUS_Q3);
       if (body.action === "run") {
-        if (body.dry_run === true) return sende(200, DRY_SIGNALS_MEDTECH);
+        if (body.dry_run === true) {
+          return sende(200, body.campaign_id === "38fee505-00db-45ca-8f0a-101dcf5b12ab"
+            ? DRY_SIGNALS_Q3 : DRY_SIGNALS_MEDTECH);
+        }
         if (body.stage === "reveal" && body.confirm_credits === undefined) {
           // ⚠️ HIER HAENGT ABSCHNITT C. `wrap409` liefert DENSELBEN Rumpf mit
           // Status 200 — ein Backend, das den Fehler in eine Erfolgsantwort
@@ -251,6 +320,9 @@ createServer((req, res) => {
         return sende(200, body.lang === "en" ? SIGNALE_EN : SIGNALE);
       }
       if (body.action === "update_campaign") return sende(200, UPDATE_CAMPAIGN);
+      if (body.action === "list_campaign_leads") {
+        return sende(200, body.fields === "full" ? LEADS_FULL : LEADS_COMPACT);
+      }
       return sende(400, { error: `unerwartete action: ${body.action}` });
     }
     if (req.url.startsWith("/functions/v1/n8n-proxy")) {
@@ -625,6 +697,78 @@ P=$(letzte "/functions/v1/campaign-pipeline")
 [ "$(echo "$P" | jq -r '.body | has("lang")')" = "false" ] \
   && ok "GEGENRICHTUNG: ohne lang schickt der Adapter keines (der Default gehoert dem Backend)" \
   || ko "der Adapter setzt selbst ein lang: $(echo "$P" | jq -r '.body.lang')"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "I · Nachzug zu supabase#76 — fields und die neuen Antwortfelder"
+
+# ⚠️ WAS DIESER ABSCHNITT NICHT BELEGT. supabase#76 ist am 04.09.2026 noch
+# OFFEN; Produktion liefert weder kompakte Zeilen noch die neuen Felder (heute
+# nachgemessen: listCampaignLeads auf Q3 gibt 35 volle Zeilen mit 19 Schluesseln,
+# ohne `fields`/`hint`; pipelineStatus hat kein `stages` und kein `contacts`).
+# Geprueft wird deshalb die ADAPTER-Seite: dass der Parameter ankommt und die
+# Antwort unveraendert durchkommt. Die Zahlen aus der Aufgabe (33 Zeilen, sieben
+# Felder) gehoeren zur Gegenseite und stehen dort — gemessen sind es 35 Zeilen
+# und neun Schluessel.
+
+ruf "$TOK_TEAM" listCampaignLeads '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab"}' >/dev/null
+E=$(letzte "/functions/v1/n8n-embed")
+[ "$(echo "$E" | jq -r '.body | has("fields")')" = "false" ] \
+  && ok "ohne Angabe schickt der Adapter kein fields — der Default gehoert n8n-embed" \
+  || ko "der Adapter setzt selbst ein fields: $(echo "$E" | jq -r '.body.fields')"
+
+ruf "$TOK_TEAM" listCampaignLeads '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","fields":"full"}' >/dev/null
+E=$(letzte "/functions/v1/n8n-embed")
+[ "$(echo "$E" | jq -r '.body.fields')" = "full" ] \
+  && ok "fields=full erreicht das Backend" \
+  || ko "fields wird verworfen (Allowlist) oder nicht gebaut: $(echo "$E" | jq -c '.body')"
+
+# Die kompakte Zeile, wie #76 sie projiziert: neun Schluessel, keiner mehr.
+R=$(ruf "$TOK_TEAM" listCampaignLeads '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","fields":"compact"}')
+K=$(echo "$R" | text | jq -r '.leads[0] | keys_unsorted | sort | join(",")')
+ERW="company_domain,company_name,fit_gate,has_email,has_phone,id,lifecycle_stage,score,strong_signals"
+[ "$K" = "$ERW" ] \
+  && ok "kompakte Zeile: genau die neun Schluessel aus #76" \
+  || ko "Schluessel weichen ab: $K"
+
+# GEGENRICHTUNG: die volle Zeile ist breiter. Ohne diesen Fall waere auch ein
+# Adapter gruen, der jede Antwort auf neun Schluessel zusammenstriche.
+R=$(ruf "$TOK_TEAM" listCampaignLeads '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","fields":"full"}')
+NF=$(echo "$R" | text | jq -r '.leads[0] | keys | length')
+[ "${NF:-0}" -gt 9 ] \
+  && ok "GEGENRICHTUNG: fields=full liefert $NF Schluessel — der Adapter kuerzt nichts" \
+  || ko "die volle Zeile hat nur $NF Schluessel"
+
+# ── Durchreichen, ohne Mapping ───────────────────────────────────────────────
+# ⚠️ HIER GAB ES NICHTS ZU BAUEN, und das ist der Punkt: der Dispatch gibt
+# `JSON.stringify(data)` weiter. Die Assertion haelt das fest, damit ein
+# spaeteres "Aufbereiten" der Antwort auffaellt.
+R=$(ruf "$TOK_TEAM" pipelineStatus '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab"}')
+S_TXT=$(echo "$R" | text)
+[ "$(echo "$S_TXT" | jq -r '.stages | length')" = "5" ] \
+  && ok "stages kommen unveraendert an (fuenf Eintraege)" \
+  || ko "stages fehlen oder sind umgeformt: $(echo "$S_TXT" | jq -c '.stages')"
+[ "$(echo "$S_TXT" | jq -r '.stages[0].label_de')" = "Firmendaten vervollständigen" ] \
+  && ok "label_de steht woertlich da (kein Uebersetzen, kein Umbenennen)" \
+  || ko "label_de veraendert: $(echo "$S_TXT" | jq -r '.stages[0].label_de')"
+[ "$(echo "$S_TXT" | jq -r '.contacts.andere_rolle')" = "31" ] \
+  && ok "contacts mit allen drei Zustaenden kommt durch" \
+  || ko "contacts fehlt oder ist umgeformt: $(echo "$S_TXT" | jq -c '.contacts')"
+
+R=$(ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","stage":"signals","dry_run":true}')
+S_TXT=$(echo "$R" | text)
+[ "$(echo "$S_TXT" | jq -r '.candidate_count')" = "0" ] \
+  && ok "Q3/signals: null Kandidaten (der Fall, fuer den why_zero gebaut ist)" \
+  || ko "candidate_count=$(echo "$S_TXT" | jq -r '.candidate_count')"
+[ "$(echo "$S_TXT" | jq -r '.why_zero.de')" = "34 sind nicht über dem Fit-Gate" ] \
+  && ok "why_zero kommt woertlich an, Satz und counts unveraendert" \
+  || ko "why_zero fehlt oder ist umgeformt: $(echo "$S_TXT" | jq -c '.why_zero')"
+
+# GEGENRICHTUNG: bei Kandidaten darf why_zero NICHT dastehen — eine Begruendung
+# neben einem Ergebnis liest der Agent als Absage.
+R=$(ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"signals","dry_run":true}')
+[ "$(echo "$R" | text | jq -r 'has("why_zero")')" = "false" ] \
+  && ok "GEGENRICHTUNG: mit vier Kandidaten trägt die Antwort kein why_zero" \
+  || ko "why_zero steht neben einem Ergebnis"
 
 # ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
