@@ -2573,7 +2573,7 @@ export default {
         {
           name: "listCampaignLeads",
           title: "Campaign: List Leads",
-          description: "List leads in a campaign, optionally filtered by lifecycle_stage or enrichment_status. Returns up to 100 per call.",
+          description: "List leads in a campaign, optionally filtered by lifecycle_stage or enrichment_status. Returns up to 100 per call. Compact rows by default \u2014 id, company name, domain, score, fit_gate, strong_signals, has_email, has_phone, lifecycle_stage \u2014 which is what you need to rank and to decide. For one lead's complete record use getCampaignLeadFields, or pass fields=full.",
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
@@ -2582,13 +2582,18 @@ export default {
               lifecycle_stage: { type: "string", enum: ["imported", "enriched", "scored", "crm_ready", "crm_synced", "rejected", "bounced"], description: "Optional: filter by lifecycle stage." },
               enrichment_status: { type: "string", enum: ["pending", "enriched", "failed", "skipped"], description: "Optional: filter by enrichment status." },
               limit: { type: "integer", description: "Default 50, max 100." },
+              // ⚠️ OHNE DIESE PROPERTY WAERE DER PARAMETER TOT. Der Dispatcher
+              // baut den Payload aus einer Whitelist, und die Allowlist aus #38
+              // verwirft davor jeden Schluessel, der nicht im Schema steht —
+              // dieselbe Klasse wie `country`/`industry` und `lang` in #41.
+              fields: { type: "string", enum: ["compact", "full"], description: "compact for lists and ranking; full only when the user asks for a specific lead's details. Default compact." },
             },
           },
         },
         {
           name: "pipelineStatus",
           title: "Pipeline: Status",
-          description: "Show where a campaign's leads stand in the qualification chain. Returns the funnel (how many leads have a domain, firmographics, a score, a signal, an email, a phone), how many candidates each stage currently has, and the top 10 leads by priority. Read-only, spends no credits. Call this FIRST whenever the user asks what to do with a campaign — the pending counts tell you which stage to run next. The gate_column field says which signal column the reveal gate uses; if it reads 'active_signals' the gate is softer than specified and weak signals still count.",
+          description: "Show where a campaign's leads stand in the qualification chain. Returns the funnel (how many leads have a domain, firmographics, a score, a signal, an email, a phone), how many candidates each stage currently has, and the top 10 leads by priority. Read-only, spends no credits. Call this FIRST whenever the user asks what to do with a campaign — the pending counts tell you which stage to run next. The gate_column field says which signal column the reveal gate uses; if it reads 'active_signals' the gate is softer than specified and weak signals still count. The reply carries `stages` \u2014 one entry per stage with its pending count and `label_de`/`label_en`. Use those labels when you name a stage to the user; the internal ids (resolve, reveal) are not words a user knows. `contacts` counts three states, not two: `passend`, `andere_rolle`, `fehlt` \u2014 the middle one is the common case that \"has an e-mail\" hides, a contact who is there but in the wrong role.",
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
@@ -2600,7 +2605,7 @@ export default {
         {
           name: "pipelineRun",
           title: "Pipeline: Run Stage",
-          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends 3 credits per lead (13 with with_phone) and resolve spends 1 per lead; score, signals and rescore spend none \u2014 so resolve needs confirm_credits too, not just reveal. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first. Never run this against a demo campaign; it is refused with 403.",
+          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends 3 credits per lead (13 with with_phone) and resolve spends 1 per lead; score, signals and rescore spend none \u2014 so resolve needs confirm_credits too, not just reveal. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first, and the reply then carries `why_zero` with per-condition `counts` and a finished sentence in `de` and `en`: report that reason, never invent one. `why_zero` is absent whenever there are candidates. Never run this against a demo campaign; it is refused with 403.",
           inputSchema: {
             type: "object",
             required: ["campaign_id", "stage"],
@@ -4013,6 +4018,10 @@ if (name === "getChapterOverview") {
           if (args.lifecycle_stage) payload.lifecycle_stage = args.lifecycle_stage;
           if (args.enrichment_status) payload.enrichment_status = args.enrichment_status;
           if (args.limit) payload.limit = args.limit;
+          // Kein Default hier. n8n-embed liest `body.fields ?? 'compact'`; ein
+          // zweiter Default an dieser Stelle waere die naechste Stelle, die
+          // driftet.
+          if (args.fields) payload.fields = args.fields;
         } else if (name === "getCampaignLeadFields") {
           payload.campaign_id = args.campaign_id;
         } else if (name === "listLeadSignals") {

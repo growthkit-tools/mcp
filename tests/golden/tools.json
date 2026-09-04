@@ -511,6 +511,7 @@
     "props": [
       "campaign_id",
       "enrichment_status",
+      "fields",
       "lifecycle_stage",
       "limit"
     ],
