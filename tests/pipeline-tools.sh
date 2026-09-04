@@ -577,7 +577,57 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-sec "G · Selbstpruefung der Tabelle"
+sec "G · Deprecated-Alias, Hinweisparameter und Sprache"
+
+# `company_name` ist der Name, den gecachte Tool-Listen noch schicken. Ohne
+# Alias UND Abbildung passiert zweierlei: die Allowlist verwirft ihn (er stuende
+# nicht im Schema), und der Provider bekaeme keinen Namen — der Aufruf liefe in
+# "domain or company name is required".
+ruf "$TOK_TEAM" enrichCompany '{"company_name":"Axept Business Software"}' >/dev/null
+X=$(letzte "/functions/v1/n8n-proxy")
+[ "$(echo "$X" | jq -r '.body.params.name')" = "Axept Business Software" ] \
+  && ok "company_name wird auf name abgebildet (gecachte Tool-Listen funktionieren weiter)" \
+  || ko "company_name kommt nicht als name an: $(echo "$X" | jq -c '.body.params')"
+[ "$(echo "$X" | jq -r '.body.params | has("company_name")')" = "false" ] \
+  && ok "und der alte Schluessel wird nicht zusaetzlich mitgeschickt" \
+  || ko "company_name geht zusaetzlich an den Provider"
+
+# Vorrang, wenn ein Client beides schickt: der NEUE Name gewinnt. Andersherum
+# ueberholte ein alter, gecachter Wert den frisch gesetzten.
+ruf "$TOK_TEAM" enrichCompany '{"name":"Neu AG","company_name":"Alt AG"}' >/dev/null
+X=$(letzte "/functions/v1/n8n-proxy")
+[ "$(echo "$X" | jq -r '.body.params.name')" = "Neu AG" ] \
+  && ok "sind beide gesetzt, gewinnt name" \
+  || ko "der veraltete Alias hat name ueberschrieben: $(echo "$X" | jq -r '.body.params.name')"
+
+# Die Hinweisparameter aus Stufe 0. Ohne sie ist der Rat in der Beschreibung
+# ("Land oder Branche angeben, dann erneut") nicht befolgbar — die Allowlist
+# verwirft, was nicht im Schema steht.
+ruf "$TOK_TEAM" enrichCompany '{"name":"Caldera","country":"CH","industry":"ERP"}' >/dev/null
+X=$(letzte "/functions/v1/n8n-proxy")
+[ "$(echo "$X" | jq -r '.body.params.country')" = "CH" ] && [ "$(echo "$X" | jq -r '.body.params.industry')" = "ERP" ] \
+  && ok "country und industry erreichen Stufe 0 — der Wiederholungs-Rat ist ausfuehrbar" \
+  || ko "country/industry kommen nicht an: $(echo "$X" | jq -c '.body.params')"
+
+# `lang` fuer die signals-Stufe. campaign-pipeline reicht es an
+# lead-signals-enrich weiter; ohne die Property verwarf die Allowlist es, und
+# die Signalsaetze waren immer deutsch.
+ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"signals","dry_run":true,"lang":"en"}' >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+[ "$(echo "$P" | jq -r '.body.lang')" = "en" ] \
+  && ok "pipelineRun reicht lang durch" \
+  || ko "lang erreicht campaign-pipeline nicht: $(echo "$P" | jq -c '.body')"
+
+# GEGENRICHTUNG: ohne lang darf auch keines im Payload stehen — sonst setzte der
+# Adapter selbst einen Default und der Fall darueber belegte nichts.
+ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"signals","dry_run":true}' >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+[ "$(echo "$P" | jq -r '.body | has("lang")')" = "false" ] \
+  && ok "GEGENRICHTUNG: ohne lang schickt der Adapter keines (der Default gehoert dem Backend)" \
+  || ko "der Adapter setzt selbst ein lang: $(echo "$P" | jq -r '.body.lang')"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "H · Selbstpruefung der Tabelle"
 
 ANZ=$(wc -l < "$LOG" | tr -d ' ')
 [ "${ANZ:-0}" -gt 0 ] \
