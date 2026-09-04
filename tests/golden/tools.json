@@ -367,7 +367,10 @@
     "meta": null,
     "name": "enrichCompany",
     "props": [
+      "company_name",
+      "country",
       "domain",
+      "industry",
       "name"
     ],
     "required": []

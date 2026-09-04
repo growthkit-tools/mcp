@@ -2175,7 +2175,7 @@ export default {
         {
           name: "enrichCompany",
           title: "Enrich Company",
-          description: "Get company info by domain or name. Returns industry, employees, revenue, location, technologies. Prefer `domain` \u2014 it is unambiguous; a name matches whatever the provider thinks it means.",
+          description: "Get company info by domain or name. Returns industry, employees, revenue, location, technologies. Prefer `domain` \u2014 it is unambiguous; a name matches whatever the provider thinks it means. `domain_unresolved` is not a provider failure \u2014 no provider was called and no credit was spent. The reply carries `candidates` (up to five domains with titles): offer them to the user, or pass `country` / `industry` as hints and try again.",
           inputSchema: { type: "object", properties: {
             domain: { type: "string", description: "Company domain e.g. seeburger.de" },
             // ⚠️ HEISST `name`, NICHT `company_name`. Beide Provider-Zweige lesen
@@ -2188,6 +2188,23 @@ export default {
             // schicken (findContacts, findEmail), heissen `company` und stimmen
             // mit ihrem Zweig ueberein — geprueft, nicht angenommen.
             name: { type: "string", description: "Company name (if the domain is unknown), e.g. 'Seeburger AG'." },
+            // ⚠️ DEPRECATED ALIAS, ABSICHTLICH STEHENGELASSEN. Bis zum 03.09.2026
+            // hiess der Parameter `company_name`; Clients cachen Tool-Listen und
+            // schicken den alten Namen noch Wochen weiter. Ohne diesen Eintrag
+            // wuerde die Allowlist aus #38 ihn stumm verwerfen — der Aufruf
+            // kaeme dann ohne Namen an und liefe in "domain or company name is
+            // required". Der Dispatch bildet ihn auf `name` ab; `name` gewinnt,
+            // wenn beide gesetzt sind.
+            company_name: { type: "string", description: "DEPRECATED — use `name`. Accepted as an alias for one more release so cached tool lists keep working; if both are given, `name` wins." },
+            // Hinweise fuer Stufe 0 (Domain aus dem Namen aufloesen). Sie sind
+            // der Grund, aus dem die Empfehlung in der Beschreibung ueberhaupt
+            // befolgbar ist: n8n-proxy liest `params.country` und
+            // `params.industry` und reicht sie an `loeseDomainAuf` weiter. Ohne
+            // die beiden Properties verwirft die Allowlist sie, und "Land oder
+            // Branche angeben, dann erneut" waere ein Rat, den niemand
+            // ausfuehren kann.
+            country: { type: "string", description: "Optional hint for resolving the domain from the name: country name or ISO code, e.g. 'CH'. Only used when `domain` is absent." },
+            industry: { type: "string", description: "Optional hint for resolving the domain from the name, e.g. 'ERP software'. Only used when `domain` is absent." },
           }},
         },
         {
@@ -3481,11 +3498,21 @@ if (name === "getChapterOverview") {
         };
 
         if (enrichActions[name]) {
+          // Deprecated-Alias aufloesen, bevor der Payload gebaut wird. Beide
+          // Provider-Zweige lesen `name`; `company_name` ist nur noch der
+          // Name, den gecachte Tool-Listen schicken. `name` gewinnt, damit ein
+          // Client, der beides mitschickt, nicht vom aelteren Wert ueberholt
+          // wird.
+          const enrichArgs = { ...args };
+          if (enrichArgs.company_name !== undefined) {
+            if (enrichArgs.name === undefined) enrichArgs.name = enrichArgs.company_name;
+            delete enrichArgs.company_name;
+          }
           const enrichPayload = {
             user_token: userToken,
             provider: "enrichment",
             action: enrichActions[name],
-            params: { ...args },
+            params: enrichArgs,
           };
 
           try {
