@@ -2606,12 +2606,20 @@ export default {
             required: ["campaign_id", "stage"],
             properties: {
               campaign_id: { type: "string", description: "ID of the campaign (from listCampaigns)." },
-              stage: { type: "string", enum: ["resolve", "score", "signals", "reveal", "rescore"], description: "resolve = find domain and firmographics. score = ICP fit. signals = why-now scan. reveal = persona, email and optionally phone (SPENDS CREDITS). rescore = second pass once seniority is known." },
+              stage: { type: "string", enum: ["resolve", "score", "signals", "reveal", "rescore"], description: "resolve = find domain and firmographics. score = ICP fit. signals = why-now scan. reveal = persona, email and optionally phone (SPENDS CREDITS). rescore = second pass once seniority is known. Map user language: Firmendaten vervollstaendigen/ergaenzen/anreichern or complete company data = resolve; bewerten/priorisieren/einordnen or score/rank = score, use rescore if the campaign was scored before; Anlaesse/Signale/Trigger/Why-now suchen or find triggers = signals; Ansprechpartner/Kontakte finden, E-Mail/Telefon ermitteln or find contacts = reveal" },
               limit: { type: "integer", description: "How many candidates to process. Default 10, max 25." },
               min_score: { type: "integer", description: "Fit threshold for signals and reveal. Default 60." },
               require_signal: { type: "boolean", description: "reveal only: require an active why-now signal. Default true. Setting this to false widens who gets contacted \u2014 ask the user before you do it." },
               with_phone: { type: "boolean", description: "reveal only: also reveal a mobile number. Default false. A phone costs 10 credits per lead on top of the 3 for the email." },
               dry_run: { type: "boolean", description: "true = report candidates and estimated_credits, change nothing. Always do this first." },
+              // ⚠️ OHNE DIESE PROPERTY WAR DIE SPRACHE NICHT EINSTELLBAR.
+              // campaign-pipeline liest `body.lang` und reicht es an
+              // lead-signals-enrich weiter (Default "de"); die Allowlist aus
+              // #38 verwirft aber jeden Schluessel, der hier nicht steht. Ein
+              // Client konnte die Sprache also nicht setzen, und die Signale
+              // waren immer deutsch — unabhaengig davon, in welcher Sprache
+              // der Nutzer arbeitet.
+              lang: { type: "string", enum: ["de", "en"], description: "Language for the signal sentences written by the `signals` stage. Default de. Other stages ignore it." },
               confirm_credits: { type: "integer", description: "Required for a paid stage when dry_run is false: the exact estimated_credits from the dry run. A mismatch is refused with 409 and a fresh number \u2014 the candidate set changed, so show the user the new figure instead of retrying with the old one." },
             },
           },

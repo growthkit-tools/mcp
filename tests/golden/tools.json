@@ -603,6 +603,7 @@
       "campaign_id",
       "confirm_credits",
       "dry_run",
+      "lang",
       "limit",
       "min_score",
       "require_signal",
