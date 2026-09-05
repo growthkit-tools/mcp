@@ -143,6 +143,36 @@ const STATUS_Q3 = {
   ],
 };
 
+// ⚠️ AUS EINER ECHTEN ANTWORT, am 05.09.2026 ueber mcp.growthkit.tools geholt
+// (Q3, view-Token) — aber aus `pipelineStatus`, nicht aus `pipelineRun`:
+// `pipelineRun` ist admin/team, der Token hier ist `gk_view_`. Das ist kein
+// Behelf, sondern derselbe Wert: campaign-pipeline berechnet `status.stages`
+// und `run.next` mit DERSELBEN Funktion (`pendingUebersicht`), und der Code
+// sagt das an Ort und Stelle ("DIESELBE FUNKTION WIE `run.next`. Zwei
+// Rechenwege wuerden sich innerhalb einer Sitzung widersprechen").
+//
+// Fuenf Stufen, `why_zero` bei genau denen mit pending 0 — hier score, signals
+// und rescore. Saetze und Zaehler woertlich uebernommen.
+const NEXT_Q3 = {
+  pending: { resolve: 1, score: 0, signals: 0, reveal: 1, rescore: 0 },
+  stages: [
+    { stage: "resolve", pending: 1, label_de: "Firmendaten vervollständigen", label_en: "Complete company data" },
+    { stage: "score", pending: 0, label_de: "Firmen bewerten", label_en: "Score companies",
+      why_zero: { counts: { bereits_bewertet: 33 },
+        de: "33 sind bereits bewertet. Neu bewerten geht über „neu bewerten\".",
+        en: "33 are already scored. Use \"re-score\" to run them again." } },
+    { stage: "signals", pending: 0, label_de: "Anlässe suchen", label_en: "Find timing signals",
+      why_zero: { counts: { kein_fit_gate: 9, kuerzlich_gescannt: 24 },
+        de: "24 wurden kürzlich gescannt; 9 sind nicht über dem Fit-Gate",
+        en: "24 were scanned recently; 9 are below the fit gate" } },
+    { stage: "reveal", pending: 1, label_de: "Ansprechpartner finden", label_en: "Find contacts" },
+    { stage: "rescore", pending: 0, label_de: "neu bewerten", label_en: "Re-score",
+      why_zero: { counts: { unveraendert: 33 },
+        de: "33 sind unverändert bewertet — kein neuer Lauf nötig.",
+        en: "33 are scored and unchanged — no re-run needed." } },
+  ],
+};
+
 // MedTech-Kern-DACH-KMU-GTM-Q3-2026, `run signals dry_run` — vier Kandidaten
 // (score >= 60, nie gescannt), Scores 75/75/68/61, signals kostet nichts.
 const DRY_SIGNALS_MEDTECH = {
@@ -158,6 +188,10 @@ const DRY_SIGNALS_MEDTECH = {
   candidate_count: 4,
   total_pending: 4,
   estimated_credits: 0,
+  // ⚠️ `next` haengt an JEDER run-Antwort, nicht nur an der mit null
+  // Kandidaten. Stuende es nur in der Q3-Fixture, waere die Assertion unten
+  // gruen, ohne das zu belegen.
+  next: NEXT_Q3,
 };
 
 // Das mechanische Credit-Gate, Wortlaut aus _shared/pipeline-stages.ts:
@@ -176,11 +210,16 @@ const DRY_SIGNALS_Q3 = {
   candidate_count: 0,
   total_pending: 0,
   estimated_credits: 0,
+  // Aktualisiert am 05.09.2026 gegen die Live-Antwort: die alten Zahlen (34 /
+  // kein_fit_gate) stammten aus dem Quelltext des damals offenen #76 und aus
+  // Messungen vom 02.09. Seitdem ist die Kampagne bearbeitet worden UND #76 hat
+  // die Kandidatenregeln geaendert — beides zusammen ergibt heute 9/24.
   why_zero: {
-    counts: { kein_fit_gate: 34, kuerzlich_gescannt: 0 },
-    de: "34 sind nicht über dem Fit-Gate",
-    en: "34 are below the fit gate",
+    counts: { kein_fit_gate: 9, kuerzlich_gescannt: 24 },
+    de: "24 wurden kürzlich gescannt; 9 sind nicht über dem Fit-Gate",
+    en: "24 were scanned recently; 9 are below the fit gate",
   },
+  next: NEXT_Q3,
 };
 
 const GATE_409 = {
@@ -759,9 +798,37 @@ S_TXT=$(echo "$R" | text)
 [ "$(echo "$S_TXT" | jq -r '.candidate_count')" = "0" ] \
   && ok "Q3/signals: null Kandidaten (der Fall, fuer den why_zero gebaut ist)" \
   || ko "candidate_count=$(echo "$S_TXT" | jq -r '.candidate_count')"
-[ "$(echo "$S_TXT" | jq -r '.why_zero.de')" = "34 sind nicht über dem Fit-Gate" ] \
+[ "$(echo "$S_TXT" | jq -r '.why_zero.de')" = "24 wurden kürzlich gescannt; 9 sind nicht über dem Fit-Gate" ] \
   && ok "why_zero kommt woertlich an, Satz und counts unveraendert" \
   || ko "why_zero fehlt oder ist umgeformt: $(echo "$S_TXT" | jq -c '.why_zero')"
+
+# ── `next` (supabase#81) ─────────────────────────────────────────────────────
+# Auch das ein reines Durchreichen: der Dispatch gibt `JSON.stringify(data)`
+# weiter. Geprueft wird, dass ALLE FUENF Stufen ankommen — eine Teilmenge waere
+# der Fehler, der hier zaehlt: der Agent soll seinen naechsten Schritt darauf
+# stuetzen, und eine Stufe, die fehlt, kann er nicht vorschlagen.
+S_TXT=$(ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","stage":"signals","dry_run":true}' | text)
+[ "$(echo "$S_TXT" | jq -r '.next.stages | length')" = "5" ] \
+  && ok "next traegt alle fuenf Stufen" \
+  || ko "next hat $(echo "$S_TXT" | jq -r '.next.stages | length // "kein next"') Stufen"
+FEHLT=""
+for st in resolve score signals reveal rescore; do
+  echo "$S_TXT" | jq -e --arg s "$st" '.next.stages[] | select(.stage == $s)' >/dev/null 2>&1 || FEHLT="$FEHLT $st"
+done
+[ -z "$FEHLT" ] \
+  && ok "die fuenf Stufen sind namentlich da (nicht nur fuenf Eintraege)" \
+  || ko "fehlende Stufen:$FEHLT"
+[ "$(echo "$S_TXT" | jq -r '[.next.stages[] | select(has("label_de") and has("label_en"))] | length')" = "5" ] \
+  && ok "jede Stufe traegt label_de und label_en" \
+  || ko "nicht jede Stufe hat beide Labels"
+# why_zero GENAU bei pending 0 — beide Richtungen in einem Ausdruck, damit
+# weder ein fehlendes noch ein ueberzaehliges auffaellt.
+FALSCH=$(echo "$S_TXT" | jq -r '[.next.stages[] | select((.pending == 0) != (has("why_zero"))) | .stage] | join(",")')
+[ -z "$FALSCH" ] \
+  && ok "why_zero steht bei genau den Stufen mit pending 0, sonst nirgends" \
+  || ko "why_zero passt nicht zu pending bei: $FALSCH"
+[ "$(echo "$S_TXT" | jq -r '.next.pending.rescore')" = "0" ] \
+  && ok "next.pending kommt mit durch" || ko "next.pending fehlt"
 
 # GEGENRICHTUNG: bei Kandidaten darf why_zero NICHT dastehen — eine Begruendung
 # neben einem Ergebnis liest der Agent als Absage.
