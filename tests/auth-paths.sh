@@ -54,7 +54,14 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # Endpoint aus der server-card lesen statt hier zu hardcoden: MCP_ENDPOINT ist
 # laut AGENTS.md §7 Single Source of Truth in index.js und fällt in die Card.
-curl -sf -m 20 "$BASE/.well-known/mcp/server-card.json" -o "$TMP/card.json" \
+# ⚠️ MIT WIEDERHOLUNG, und der Grund steht in einem Lauf: am 05.09.2026 hat
+# probe.sh die Card um 07:45:26 geholt (gruen) und auth-paths.sh sie 1,8 s
+# spaeter NICHT mehr bekommen — derselbe Commit, dieselbe Preview-URL, Abbruch
+# mit exit 2. Eine frisch deployte Preview-Version flackert; ein einziger
+# Versuch macht daraus einen roten Lauf, der nichts ueber den Code sagt.
+# --retry-all-errors wiederholt auch bei 4xx/5xx, nicht nur bei Netzfehlern.
+curl -sf -m 20 --retry 3 --retry-delay 2 --retry-all-errors \
+  "$BASE/.well-known/mcp/server-card.json" -o "$TMP/card.json" \
   || { echo "server-card.json nicht erreichbar unter $BASE — Abbruch" >&2; exit 2; }
 EP=$(jq -r '.transport.endpoint' "$TMP/card.json")
 [ -n "$EP" ] && [ "$EP" != "null" ] \
