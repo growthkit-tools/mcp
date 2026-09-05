@@ -449,6 +449,49 @@ jobs:
           echo "TARGET=$TARGET"  >> "$GITHUB_ENV"
           echo "target=$TARGET"  >> "$GITHUB_OUTPUT"
 
+      # ───────────────────────────────────────────────────────────────────────
+      # PREVIEW-BEREITSCHAFT. Der Schritt darueber wartet auf den BUILD; dass die
+      # Preview-URL danach auch ausliefert, ist eine andere Aussage. Zwischen
+      # „Build gruen" und „Alias antwortet" liegen Sekunden, in denen jeder
+      # Aufruf ins Leere geht.
+      #
+      # ⚠️ DER PFAD TRAEGT DAS /mcp/-SEGMENT. Die Card liegt unter
+      # /.well-known/mcp/server-card.json (200); /.well-known/server-card.json
+      # ist 404 — am 05.09.2026 gegen Produktion gemessen. Mit dem kuerzeren
+      # Pfad haette dieses Gate nie ein 200 gesehen und JEDEN Lauf nach 90 s
+      # abgebrochen.
+      #
+      # Genau diese Datei fragen auch probe.sh (Zeile 64) und auth-paths.sh
+      # (Zeile 57) als Erstes ab — das Gate prueft damit dieselbe Bedingung, an
+      # der die Suiten sonst mit exit 2 abbrechen.
+      - name: Auf die Preview warten
+        if: steps.wait.outputs.skip == 'false'
+        run: |
+          set -uo pipefail
+          CARD="$TARGET/.well-known/mcp/server-card.json"
+          # ⚠️ ZEITSCHRANKE, NICHT VERSUCHSZAEHLER. 18 Versuche x 5 s Pause sind
+          # 85 s SCHLAF plus 18 Anfragen — gemessen 95 s, und die Abbruchmeldung
+          # haette „nach 90 s" behauptet. `SECONDS` zaehlt ab Start dieser Shell,
+          # der Deckel stimmt damit auch, wenn eine Anfrage in ihr Timeout laeuft.
+          ENDE=$(( SECONDS + 90 ))
+          VERSUCH=0
+          while [ "$SECONDS" -lt "$ENDE" ]; do
+            [ "$VERSUCH" -gt 0 ] && sleep 5
+            VERSUCH=$(( VERSUCH + 1 ))
+            # curl schreibt bei Verbindungsfehlern selbst "000" und endet
+            # ungleich 0; `|| true` schluckt nur den Status. Ein zusaetzliches
+            # `|| echo 000` haengte eine zweite Null-Gruppe an und der Log
+            # meldete "HTTP 000000".
+            CODE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$CARD" || true)
+            if [ "$CODE" = "200" ]; then
+              echo "Preview bereit nach ${SECONDS} s, Versuch ${VERSUCH} (HTTP 200)"
+              exit 0
+            fi
+            echo "  noch nicht bereit (HTTP $CODE) — naechster Versuch in 5 s"
+          done
+          echo "Preview nach 90 s nicht erreichbar" >&2
+          exit 1
+
       - name: Probe ausfuehren
         if: steps.wait.outputs.skip == 'false'
         run: |
