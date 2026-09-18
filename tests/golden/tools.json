@@ -309,6 +309,16 @@
   },
   {
     "meta": null,
+    "name": "deleteLeadSignal",
+    "props": [
+      "signal_id"
+    ],
+    "required": [
+      "signal_id"
+    ]
+  },
+  {
+    "meta": null,
     "name": "deleteMemories",
     "props": [
       "change_reason",
@@ -801,6 +811,18 @@
     ],
     "required": [
       "lead_id",
+      "updates"
+    ]
+  },
+  {
+    "meta": null,
+    "name": "updateLeadSignal",
+    "props": [
+      "signal_id",
+      "updates"
+    ],
+    "required": [
+      "signal_id",
       "updates"
     ]
   },

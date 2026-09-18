@@ -1549,7 +1549,7 @@ export default {
       // Schluessel-Map unten. Grund: `allTools` ist die EINZIGE Stelle, an der
       // steht, welche Argumente ein Tool hat — und die Allowlist in tools/call
       // braucht genau das. Die Alternative waere eine zweite Liste der Keys
-      // gewesen, also eine Synchronisationspflicht ueber 71 Tools (§7a).
+      // gewesen, also eine Synchronisationspflicht ueber alle Tools (§7a).
       //
       // Das `katalog:`-Label ist kein Stilexperiment, sondern der Preis dafuer,
       // dass der Diff lesbar bleibt (§22): der Rest dieses Blocks — Rollenfilter,
@@ -2645,6 +2645,48 @@ export default {
             },
           },
         },
+        // Signal-Korrektur (supabase#116, n8n-embed v188). Anlass: zwei
+        // Fehlzuordnungen an einem Tag, fuer die es ueber das Werkzeug keinen
+        // Weg zurueck gab — `why_now: null` in updateCampaignLead laesst ALLE
+        // manuellen Signale eines Leads ablaufen, nicht eines. Den Kontrakt
+        // (Felder, expires_at-Regel, Codes) haelt n8n-embed; hier steht nur,
+        // was ein Modell braucht, um ihn zu treffen.
+        {
+          name: "updateLeadSignal",
+          title: "Campaign: Update Lead Signal",
+          description: "Correct ONE stored why-now signal in place. signal_id is the `id` of a signal from listLeadSignals \u2014 call that with active_only=false to also see expired signals. updates carries only the fields to change: type, signal, source_url, source_label, observed_at, last_confirmed_at. Anything else is ignored and named in `ignored_fields`. The signal stays on its lead: lead_id is not writable, so a signal recorded on the wrong company is removed with deleteLeadSignal, not moved. Changing type, observed_at or last_confirmed_at makes the database recompute expires_at \u2014 the reply says so in `expires_at_neu_berechnet`; expires_at itself cannot be set. Setting last_confirmed_at to the date you re-checked the source revives a signal whose expiry has passed \u2014 for signals that describe an ongoing state (e.g. tech_change: the system is still in use). Event types (funding, hiring, \u2026) keep counting from observed_at, so for them last_confirmed_at extends nothing; check `signal.expires_at` in the reply. Errors: 404 signal_not_found (unknown id, or not in this workspace), 409 duplicate_source_url (this lead already has another signal with that URL \u2014 delete that one first or use a different source), 400 with code signal_too_short, signal_too_long, invalid_type or source_required.",
+          inputSchema: {
+            type: "object",
+            required: ["signal_id", "updates"],
+            properties: {
+              signal_id: { type: "string", description: "UUID of the signal \u2014 the `id` field of a signal in listLeadSignals." },
+              updates: {
+                type: "object",
+                description: "Only the fields to change. At least one of them.",
+                properties: {
+                  type: { type: "string", enum: ["funding", "acquisition", "hiring", "job_change", "tech_change", "expansion", "leadership", "regulatory", "event", "inbound", "other"] },
+                  signal: { type: "string", description: "The one-sentence signal, 10 to 1000 characters." },
+                  source_url: { type: "string", description: "Source URL, must start with http:// or https://. Unique per lead." },
+                  source_label: { type: "string", description: "Readable source name. It takes precedence over the URL host in `cite`, which goes verbatim into outreach \u2014 so a publication or site name, never a colleague's name." },
+                  observed_at: { type: "string", description: "YYYY-MM-DD \u2014 date of the source or event, not the date we saw it." },
+                  last_confirmed_at: { type: "string", description: "YYYY-MM-DD \u2014 when the fact was last re-checked." },
+                },
+              },
+            },
+          },
+        },
+        {
+          name: "deleteLeadSignal",
+          title: "Campaign: Delete Lead Signal",
+          description: "Permanently delete ONE why-now signal, e.g. one recorded on the wrong company. Always confirm with the user first: name the company, the signal sentence and its source, and wait for an explicit yes. There is no undo and no version history. signal_id is the `id` of a signal from listLeadSignals (active_only=false also lists expired ones). Only this signal is removed \u2014 the lead's other signals stay untouched. If the signal is right and only a detail is wrong, use updateLeadSignal instead. 404 signal_not_found means the id is unknown or not in this workspace.",
+          inputSchema: {
+            type: "object",
+            required: ["signal_id"],
+            properties: {
+              signal_id: { type: "string", description: "UUID of the signal \u2014 the `id` field of a signal in listLeadSignals." },
+            },
+          },
+        },
         {
           name: "show_callable_leads",
           title: "☎ Show Callable Leads",
@@ -3001,6 +3043,13 @@ export default {
           pipelineStatus:        ["admin", "team", "view"],
           listLeadSignals:       ["admin", "team", "view"],
           pipelineRun:           ["admin", "team"],
+          // Signal-Korrektur: Writes, deshalb kein "view". Auch das LOESCHEN
+          // bewusst mit "team" — anders als deleteMemories/deleteDocument: ohne
+          // es bliebe einem team-Token nur `why_now: null` ueber
+          // updateCampaignLead, und das trifft ALLE manuellen Signale des Leads.
+          // Genau dieser Umweg hat am 18.09. einen richtigen Beleg mitgenommen.
+          updateLeadSignal:      ["admin", "team"],
+          deleteLeadSignal:      ["admin", "team"],
           show_callable_leads:   ["admin", "team", "view"],
           // App-private call tool. Listed for admin/team (host hides it from the model
           // via _meta.ui.visibility:["app"] and proxies the iframe's tools/call). Not
@@ -3032,9 +3081,11 @@ export default {
         const DESTRUCTIVE_TOOLS = new Set([
           // Deletes / cancels
           "deleteMemories", "clearMemories", "deleteDocument", "cancelReminder",
+          "deleteLeadSignal",
           // Overwrites existing values
           "updateMemory", "restoreVersion", "setWorkingMemory", "updateCampaign",
           "updateCampaignLead", "updateTask", "crmUpdateDeal", "save_call_outcome",
+          "updateLeadSignal",
           // Irreversible real-world effects (e-mail dispatch, phone call, credits)
           "email_compose", "place_call",
           // pipelineRun ueberschreibt Lead-Felder ueber update_campaign_lead UND
@@ -3094,7 +3145,7 @@ export default {
         // view-Token konnte ueber `pipelineStatus` ein `action:"run"` in den
         // Body schmuggeln, weil der Dispatch `...args` spreadet und dieser
         // Worker Argumente nirgends gegen das Schema prueft. Dort ist es pro
-        // Tool geflickt worden — hier ist es die Regel: 71 Tools, ein Ort.
+        // Tool geflickt worden — hier ist es die Regel: alle Tools, ein Ort.
         //
         // ⚠️ NUR DIE OBERSTE EBENE. Verschachtelte Objekte (`updates`,
         // `scoring`, `filters`, `seed`) gehen unveraendert durch; ihre Form
@@ -3167,6 +3218,8 @@ export default {
           pipelineStatus:        ["admin", "team", "view"],
           listLeadSignals:       ["admin", "team", "view"],
           pipelineRun:           ["admin", "team"],
+          updateLeadSignal:      ["admin", "team"],
+          deleteLeadSignal:      ["admin", "team"],
           show_callable_leads:   ["admin", "team", "view"],
           // place_call is app-private: in tools/list with _meta.ui.visibility:["app"]
           // (host hides it from the model, proxies the iframe's tools/call). admin/team
@@ -3886,6 +3939,8 @@ if (name === "getChapterOverview") {
           updateCampaign:        { url: EDGE_EMBED_URL, action: "update_campaign" },
           listCampaignLeads:     { url: EDGE_EMBED_URL, action: "list_campaign_leads" },
           listLeadSignals:       { url: EDGE_EMBED_URL, action: "list_lead_signals" },
+          updateLeadSignal:      { url: EDGE_EMBED_URL, action: "update_lead_signal" },
+          deleteLeadSignal:      { url: EDGE_EMBED_URL, action: "delete_lead_signal" },
           getCampaignLeadFields: { url: EDGE_EMBED_URL, action: "get_campaign_lead_fields" },
           updateCampaignLead:    { url: EDGE_EMBED_URL, action: "update_campaign_lead" },
           // Working Memory tools → n8n-embed (clear / list_active not exposed)
@@ -4031,6 +4086,19 @@ if (name === "getChapterOverview") {
           if (args.lang) payload.lang = args.lang;
           if (args.active_only !== undefined) payload.active_only = args.active_only;
           if (args.limit) payload.limit = args.limit;
+        } else if (name === "updateLeadSignal") {
+          // ⚠️ OHNE DIESEN ZWEIG KAEME NUR {user_token, action} AN. Ein Eintrag
+          // in toolConfig allein reicht nicht: der Payload wird pro Tool aus
+          // einer Whitelist gebaut, und ein Tool ohne Zweig schickt keine
+          // Argumente — n8n-embed antwortete dann "signal_id (valid UUID) is
+          // required". `updates` geht unveraendert durch; welche Felder
+          // schreibbar sind, entscheidet n8n-embed und meldet den Rest in
+          // `ignored_fields`. Eine zweite Feldliste hier waere die naechste,
+          // die driftet.
+          payload.signal_id = args.signal_id;
+          payload.updates = args.updates;
+        } else if (name === "deleteLeadSignal") {
+          payload.signal_id = args.signal_id;
         }
         else if (name === "updateCampaignLead") {
           payload.lead_id = args.lead_id;
