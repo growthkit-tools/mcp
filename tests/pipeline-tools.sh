@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # GrowthKit MCP Worker — Testtabelle fuer die ADAPTER-Schicht von tools/call:
-# die drei Pipeline-Tools aus specs/SPEC-lead-signals.md §6 (Abschnitte A-D) und
-# die Argument-Allowlist, die fuer ALLE Tools davorsteht (Abschnitt F).
+# die drei Pipeline-Tools aus specs/SPEC-lead-signals.md §6 (Abschnitte A-D),
+# die Argument-Allowlist, die fuer ALLE Tools davorsteht (Abschnitt F), und die
+# beiden Signal-Korrektur-Tools aus supabase#116 (Abschnitt J).
 #
 #   bash tests/pipeline-tools.sh
 #   FAKE_MODE=wrap409 bash tests/pipeline-tools.sh    # Rotlauf, siehe Abschnitt C
@@ -273,6 +274,32 @@ const SIGNALE = {
 const SIGNALE_EN = JSON.parse(JSON.stringify(SIGNALE));
 SIGNALE_EN.signals[0].cite = "ad-hoc-news, Aug 27 2026";
 
+// update_lead_signal / delete_lead_signal (supabase#116, n8n-embed v188).
+// ⚠️ FORM AUS DEM CODE, NICHT AUS EINER LIVE-ANTWORT. Beide Actions schreiben,
+// und der einzige Token auf dieser Maschine ist `gk_view_` — ein Live-Aufruf
+// waere ein Schreibzugriff auf echte Workspace-Daten. Die Schluessel stehen
+// woertlich in den beiden Zweigen von n8n-embed/index.ts (ok/deleted/signal_id/
+// lead_id bzw. ok/signal/expires_at_neu_berechnet/ignored_fields), die Codes
+// ebenso (`signal_not_found` 404, `duplicate_source_url` 409).
+//
+// Der Fake ist auch hier ein HANDLER: `ignored_fields` und der Merge entstehen
+// aus dem, was ankommt. Kaeme `updates` beim Backend nicht vollstaendig an,
+// stuende das am Client in der Antwort — sonst waere die Antwort-Assertion
+// auch fuer einen leeren Body gruen.
+const SIGNAL_BESTAND = {
+  id: "00000000-0000-4000-8000-0000000000f1",
+  lead_id: "00000000-0000-4000-8000-000000000011",
+  type: "acquisition", signal: "Uebernahme durch einen Netzbetreiber angekuendigt.",
+  source_url: "https://www.ad-hoc-news.invalid/wirtschaft/uebernahme/70011196",
+  source_label: null, observed_at: "2026-08-27", last_confirmed_at: "2026-08-27",
+  expires_at: "2027-02-23",
+};
+const SIGNAL_FELDER = ["type", "signal", "source_url", "source_label", "observed_at", "last_confirmed_at"];
+const FORMEL_EINGABEN = ["type", "observed_at", "last_confirmed_at"];
+// Fuer denselben Lead steht diese URL schon an einem ANDEREN Signal — der Fall,
+// an dem lead_signals_lead_source_uq bricht.
+const DUPE_URL = "https://www.ad-hoc-news.invalid/schon-vorhanden";
+
 // list_campaign_leads, beide Formen. Neun Schluessel je Zeile — nicht sieben:
 // die Projektion in #76 traegt zusaetzlich `id` und `lifecycle_stage`. Gezaehlt
 // im Quelltext des offenen PR, nicht geschaetzt.
@@ -357,6 +384,28 @@ createServer((req, res) => {
           });
         }
         return sende(200, body.lang === "en" ? SIGNALE_EN : SIGNALE);
+      }
+      if (body.action === "update_lead_signal" || body.action === "delete_lead_signal") {
+        // Fremde und unbekannte ID sind im Backend derselbe Fall — 404 ohne
+        // Detail. Der Fake kennt genau die eine ID seiner Fixture.
+        if (body.signal_id !== SIGNAL_BESTAND.id) return sende(404, { error: "signal_not_found" });
+        if (body.action === "delete_lead_signal") {
+          return sende(200, { ok: true, deleted: true, signal_id: body.signal_id, lead_id: SIGNAL_BESTAND.lead_id });
+        }
+        const u = body.updates;
+        if (!u || typeof u !== "object" || Array.isArray(u)) return sende(400, { error: "updates must be an object" });
+        const patch = {}; const ignored = [];
+        for (const k of Object.keys(u)) (SIGNAL_FELDER.includes(k) ? (patch[k] = u[k]) : ignored.push(k));
+        if (patch.source_url === DUPE_URL) {
+          return sende(409, { error: "Fuer diesen Lead gibt es bereits ein Signal mit dieser source_url.", code: "duplicate_source_url" });
+        }
+        const neu = FORMEL_EINGABEN.some((f) => f in patch && String(patch[f] ?? "") !== String(SIGNAL_BESTAND[f] ?? ""));
+        return sende(200, {
+          ok: true,
+          signal: { ...SIGNAL_BESTAND, ...patch, expires_at: neu ? "neu-berechnet" : SIGNAL_BESTAND.expires_at },
+          expires_at_neu_berechnet: neu,
+          ignored_fields: ignored,
+        });
       }
       if (body.action === "update_campaign") return sende(200, UPDATE_CAMPAIGN);
       if (body.action === "list_campaign_leads") {
@@ -633,7 +682,7 @@ echo "$R" | text | grep -q "Keine Entitaet mit der UUID" \
 sec "F · Allowlist gegen inputSchema — fuer ALLE Tools, im Dispatcher"
 
 # ⚠️ DER FALL AUS PR #37. Dort wurde er pro Tool geflickt (action/user_token nach
-# dem Spread); hier traegt ihn die Allowlist fuer alle 71 Tools. Deshalb prueft
+# dem Spread); hier traegt ihn die Allowlist fuer alle Tools. Deshalb prueft
 # dieser Abschnitt NICHT `action` — das faengt beides —, sondern `stage`: ein
 # Schluessel, den nur die Allowlist stoppen kann, weil kein Handler ihn kennt.
 ruf "$TOK_VIEW" pipelineStatus '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","action":"run","stage":"reveal","dry_run":false}' >/dev/null
@@ -836,6 +885,124 @@ R=$(ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f
 [ "$(echo "$R" | text | jq -r 'has("why_zero")')" = "false" ] \
   && ok "GEGENRICHTUNG: mit vier Kandidaten trägt die Antwort kein why_zero" \
   || ko "why_zero steht neben einem Ergebnis"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "J · updateLeadSignal / deleteLeadSignal — Nachzug zu supabase#116 (n8n-embed v188)"
+
+# Geprueft wird die ADAPTER-Seite, wie in I: Name der action, was im Body
+# ankommt, was an Status und Rumpf zurueckkommt, und wer das Tool ueberhaupt
+# sieht. Ob n8n-embed richtig rechnet, steht in supabase#116.
+SID="00000000-0000-4000-8000-0000000000f1"
+# ⚠️ NICHT `letzte`: das nimmt den letzten n8n-embed-Aufruf des GANZEN Laufs.
+# Kaeme der Aufruf hier gar nicht an, laese die Assertion einen aus einem
+# frueheren Abschnitt — beim Rotlauf vor der Implementierung stand so
+# `list_campaign_leads` in der Meldung. Gelesen wird nur, was NACH dem Aufruf
+# dazukam.
+neu_seit(){ tail -n +"$(( $1 + 1 ))" "$LOG" | jq -c --arg p "$2" 'select(.pfad | startswith($p))' | tail -1; }
+LEAD="00000000-0000-4000-8000-000000000011"
+
+# ── Rollen und Einordnung ────────────────────────────────────────────────────
+LV=$(mcp "$TOK_VIEW" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq -r '.result.tools[].name' | sort)
+TL=$(mcp "$TOK_TEAM" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+LT=$(echo "$TL" | jq -r '.result.tools[].name' | sort)
+# §18a (a): eine leere Liste bestuende jedes "sieht X NICHT".
+echo "$LV" | grep -qx listLeadSignals \
+  && ok "view-Liste ist nicht leer (listLeadSignals ist drin)" \
+  || ko "view-Liste leer oder ohne listLeadSignals — die NICHT-Faelle darunter messen nichts"
+for t in updateLeadSignal deleteLeadSignal; do
+  echo "$LV" | grep -qx "$t" && ko "view sieht $t — ein Lese-Token bekaeme ein Schreib-Tool" || ok "view sieht $t NICHT"
+  echo "$LT" | grep -qx "$t" && ok "GEGENRICHTUNG: team sieht $t" || ko "team sieht $t nicht"
+  A=$(echo "$TL" | jq -c --arg t "$t" '.result.tools[] | select(.name == $t) | .annotations')
+  [ "$(echo "$A" | jq -r '.readOnlyHint')" = "false" ] && [ "$(echo "$A" | jq -r '.destructiveHint')" = "true" ] \
+    && ok "$t: readOnlyHint=false, destructiveHint=true" \
+    || ko "$t falsch eingeordnet: ${A:-<nicht in der Liste>}"
+done
+
+# Der Guard in tools/call, nicht nur der Katalog — und das Backend darf den
+# abgelehnten Aufruf NIE sehen.
+VOR=$(grep -c '"action":"delete_lead_signal"' "$LOG")
+R=$(ruf "$TOK_VIEW" deleteLeadSignal "{\"signal_id\":\"$SID\"}")
+echo "$R" | text | grep -q "Permission denied" \
+  && ok "view: tools/call auf deleteLeadSignal wird abgelehnt" \
+  || ko "view darf deleteLeadSignal aufrufen: $(echo "$R" | text | head -c 80)"
+[ "$(grep -c '"action":"delete_lead_signal"' "$LOG")" = "$VOR" ] \
+  && ok "der abgelehnte Aufruf erreicht n8n-embed nicht" \
+  || ko "ESKALATION: ein view-Token hat delete_lead_signal bis zum Backend gebracht"
+
+# ── deleteLeadSignal ─────────────────────────────────────────────────────────
+# `lead_id` steht NICHT im Schema: die Allowlist muss es verwerfen.
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" deleteLeadSignal "{\"signal_id\":\"$SID\",\"lead_id\":\"$LEAD\"}")
+E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+if [ "$(echo "$E" | jq -r '.body.action')" != "delete_lead_signal" ]; then
+  ko "deleteLeadSignal kommt nicht als action=delete_lead_signal an: $([ -n "$E" ] && echo "$E" | jq -r '.body.action' || echo '<kein Aufruf protokolliert>')"
+else
+  ok "deleteLeadSignal -> n8n-embed action=delete_lead_signal"
+  [ "$(echo "$E" | jq -r '.body.signal_id')" = "$SID" ] \
+    && ok "signal_id kommt an" || ko "signal_id fehlt: $(echo "$E" | jq -c '.body')"
+  [ "$(echo "$E" | jq -r '.body.user_token')" = "$TOK_TEAM" ] \
+    && ok "user_token ist der Bearer" || ko "user_token falsch: $(echo "$E" | jq -r '.body.user_token')"
+  [ "$(echo "$E" | jq -r '.body | has("lead_id") or has("updates")')" = "false" ] \
+    && ok "sonst nichts im Body (kein lead_id, kein updates)" || ko "Body traegt mehr als signal_id: $(echo "$E" | jq -c '.body')"
+fi
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "false" ] && [ "$(echo "$R" | text | jq -r '.deleted')" = "true" ] \
+  && ok "Erfolg kommt als Erfolg an (isError=false, deleted=true)" \
+  || ko "Loeschantwort: isError=$(echo "$R" | jq -r '.result.isError') $(echo "$R" | text | head -c 80)"
+
+# ── updateLeadSignal ─────────────────────────────────────────────────────────
+# Alle sechs schreibbaren Felder PLUS `expires_at`, das nicht schreibbar ist.
+# `updates` ist verschachtelt und geht unveraendert durch (die Allowlist greift
+# nur oben) — das nicht schreibbare Feld sortiert das BACKEND aus und meldet es
+# in `ignored_fields`. Schnitte der Adapter selbst etwas weg, fehlte es dort.
+UPD='{"type":"tech_change","signal":"Setzt seit 2024 d.velop als DMS ein, laut Projektseite der Hochschule.","source_url":"https://www.hochschule.invalid/projekte/dms","source_label":"Hochschule, Projektseite","observed_at":"2024-10-01","last_confirmed_at":"2026-09-18","expires_at":"2030-01-01"}'
+# Dazu zwei Schluessel oben, die nicht ins Schema gehoeren: ein geschmuggeltes
+# `action` (wuerde aus dem Update eine Loeschung machen) und `lead_id`.
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" updateLeadSignal "{\"signal_id\":\"$SID\",\"updates\":$UPD,\"action\":\"delete_lead_signal\",\"lead_id\":\"$LEAD\"}")
+E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+if [ "$(echo "$E" | jq -r '.body.action')" != "update_lead_signal" ]; then
+  ko "updateLeadSignal kommt nicht als action=update_lead_signal an: $([ -n "$E" ] && echo "$E" | jq -r '.body.action' || echo '<kein Aufruf protokolliert>')"
+else
+  ok "updateLeadSignal -> action=update_lead_signal (das geschmuggelte action verliert)"
+  [ "$(echo "$E" | jq -r '.body.signal_id')" = "$SID" ] \
+    && ok "signal_id kommt an" || ko "signal_id fehlt: $(echo "$E" | jq -c '.body')"
+  if [ "$(echo "$E" | jq -cS '.body.updates')" = "$(echo "$UPD" | jq -cS '.')" ]; then
+    ok "updates kommt byte-identisch an (sieben Schluessel)"
+  else
+    ko "updates veraendert:"
+    printf '        gesendet:   %s\n' "$(echo "$UPD" | jq -cS '.')"
+    printf '        angekommen: %s\n' "$(echo "$E" | jq -cS '.body.updates')"
+  fi
+  [ "$(echo "$E" | jq -r '.body | has("lead_id")')" = "false" ] \
+    && ok "lead_id oben wird verworfen (nicht im Schema)" || ko "lead_id erreicht das Backend"
+fi
+S=$(echo "$R" | text)
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "false" ] \
+  && ok "Erfolg kommt als Erfolg an (isError=false)" || ko "isError=$(echo "$R" | jq -r '.result.isError'): ${S:0:100}"
+[ "$(echo "$S" | jq -c '.ignored_fields')" = '["expires_at"]' ] \
+  && ok "ignored_fields kommt durch: [\"expires_at\"]" || ko "ignored_fields: $(echo "$S" | jq -c '.ignored_fields // "fehlt"')"
+[ "$(echo "$S" | jq -r '.expires_at_neu_berechnet')" = "true" ] && [ "$(echo "$S" | jq -r '.signal.last_confirmed_at')" = "2026-09-18" ] \
+  && ok "expires_at_neu_berechnet und das neue Signal kommen durch" \
+  || ko "Antwort umgeformt: $(echo "$S" | jq -c '{expires_at_neu_berechnet, signal}')"
+
+# ── Die beiden Fehlercodes, als FEHLER ───────────────────────────────────────
+# Derselbe Mechanismus wie 409/404 in C und E: der Rumpf allein traegt die
+# Unterscheidung nicht, `isError` schon.
+FREMD="00000000-0000-4000-8000-0000000000ff"
+for t in updateLeadSignal deleteLeadSignal; do
+  R=$(ruf "$TOK_TEAM" "$t" "{\"signal_id\":\"$FREMD\",\"updates\":{\"signal\":\"Ein Satz mit genug Zeichen.\"}}")
+  buche "$(echo "$R" | jq -r '.result.isError')"
+  [ "$(echo "$R" | jq -r '.result.isError')" = "true" ] && [ "$(echo "$R" | text | jq -r '.error')" = "signal_not_found" ] \
+    && ok "$t, fremde signal_id: 404 signal_not_found als FEHLER" \
+    || ko "$t, fremde signal_id: isError=$(echo "$R" | jq -r '.result.isError') $(echo "$R" | text | head -c 80)"
+done
+R=$(ruf "$TOK_TEAM" updateLeadSignal "{\"signal_id\":\"$SID\",\"updates\":{\"source_url\":\"https://www.ad-hoc-news.invalid/schon-vorhanden\"}}")
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "true" ] && [ "$(echo "$R" | text | jq -r '.code')" = "duplicate_source_url" ] \
+  && ok "belegte source_url: 409 duplicate_source_url als FEHLER, code kommt durch" \
+  || ko "409: isError=$(echo "$R" | jq -r '.result.isError') $(echo "$R" | text | head -c 100)"
 
 # ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
