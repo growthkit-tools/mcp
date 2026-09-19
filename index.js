@@ -2632,7 +2632,7 @@ export default {
         {
           name: "listLeadSignals",
           title: "Campaign: List Lead Signals",
-          description: "List the stored why-now signals for one lead or for a whole campaign: type (funding, hiring, leadership, acquisition, expansion, tech_change, inbound, other), the one-sentence signal, its source URL, the observed date, a confidence, and `cite`. Read-only. When you use a signal in outreach, use `cite` VERBATIM as the source line \u2014 it is already formatted for the reader (\"ad-hoc-news, 27. August 2026\"). Never write \"observed\", \"observed_at\" or \"as observed on\": those are field names from our data model, not words a prospect should read. Never present a signal without its source and date.",
+          description: "List the stored why-now signals for one lead or for a whole campaign: `id` (the signal_id that updateLeadSignal and deleteLeadSignal take), type (funding, hiring, job_change, leadership, acquisition, expansion, tech_change, regulatory, event, inbound, other), the one-sentence signal, its source URL, the observed date, a confidence, and `cite`. Read-only. When you use a signal in outreach, use `cite` VERBATIM as the source line \u2014 it is already formatted for the reader (\"ad-hoc-news, 27. August 2026\"). Never write \"observed\", \"observed_at\" or \"as observed on\": those are field names from our data model, not words a prospect should read. Never present a signal without its source and date.",
           inputSchema: {
             type: "object",
             properties: {
