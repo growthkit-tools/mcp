@@ -2,10 +2,10 @@
 # GrowthKit MCP — Quell-Invarianten
 #
 # Prüft die Invarianten, die AUSSCHLIESSLICH aus dem Checkout folgen — ohne HTTP,
-# ohne laufende Instanz, ohne Workers Build. Drei Gruppen: §11 (Protokoll-Versionen
-# in index.js), die Rollen-Maps, und die Repo-Hygiene (Exec-Bit, Ignore-Regeln,
-# getrackte Secrets). Der frühere Titel sagte „aus index.js" und war seit den
-# letzten beiden zu eng.
+# ohne laufende Instanz, ohne Workers Build. Gegenstände u. a.: §11 (Protokoll-
+# Versionen in index.js), die Rollen-Maps, die Signaltypen und die Repo-Hygiene
+# (Exec-Bit, Ignore-Regeln, getrackte Secrets). Der frühere Titel sagte „aus
+# index.js" und war seit der Repo-Hygiene zu eng.
 #
 #   ./tests/source-invariants.sh            # eigenständig (unit-Job, lokal)
 #   ./tests/source-invariants.sh --nested   # aus probe.sh heraus, ohne Summenzeile
@@ -171,6 +171,87 @@ else
     ok "Rollen-Hierarchie: view ⊆ team ⊆ admin"
   else
     ko "Rollen-Hierarchie verletzt: $VIOL"
+  fi
+fi
+
+# --- Signaltypen · enum ≡ Beschreibung ≡ SIGNAL_TYPES ---------------------------
+# WARUM. Die Signaltypen stehen zweimal in index.js: im enum von updateLeadSignal
+# und als Aufzaehlung "type (…)" in der Beschreibung von listLeadSignals. Eine
+# abgeleitete Groesse, die unvermeidbar zweimal steht, braucht eine Assertion, die
+# beide vergleicht (§7a). Anlass: die Beschreibung nannte 8 von 11 (#46) —
+# dieselbe Drift, die der Validator drueben am 17.09.2026 hatte.
+#
+# ⚠️ DIE QUELLE LIEGT IM NACHBAR-REPO. SIGNAL_TYPES steht in
+# supabase/functions/_shared/lead-signal-validator.ts, und CI checkt nur dieses
+# Repo aus. Deshalb zwei Stufen:
+#   (1) IMMER: enum ≡ Beschreibung, beide Richtungen. Das ist das Gate in CI.
+#   (2) NUR wo der Nachbar-Checkout lesbar ist: beide gegen SIGNAL_TYPES, beide
+#       Richtungen. Fehlt er, steht das als Notiz da und wird NICHT als gruen
+#       gezaehlt (§18a c). Eine Kopie von SIGNAL_TYPES in dieser Datei waere die
+#       dritte Liste derselben Wahrheit — genau das, wogegen der Abschnitt steht.
+# Pfad ueberschreibbar: SIGNAL_TYPES_SRC=<datei>.
+#
+# ⚠️ GRENZE von (1): ein Typ, der drueben dazukommt und hier in BEIDEN Listen
+# fehlt, bleibt in CI gruen. Das faengt nur (2).
+SIGNAL_TYPES_SRC="${SIGNAL_TYPES_SRC:-$REPO_ROOT/../supabase/supabase/functions/_shared/lead-signal-validator.ts}"
+notiz(){ printf '  \033[33m–\033[0m %s\n' "$1"; }
+
+# Nur im Block des jeweiligen Tools lesen: ab `name: "<tool>"` bis zum naechsten
+# `name: "`. Ein dateiweiter Grep faende das erste enum IRGENDEINES Tools.
+tool_block(){ awk -v t="name: \"$1\"" 'index($0,t){f=1; next} f && /name: "/{exit} f' "$SRC"; }
+nur_in(){ comm -23 <(printf '%s\n' "$1" | sort -u) <(printf '%s\n' "$2" | sort -u) | tr '\n' ' ' | sed 's/ *$//'; }
+zaehle(){ printf '%s\n' "$1" | grep -c . || true; }
+
+ST_ENUM=$(tool_block updateLeadSignal | grep -m1 'type: { type: "string", enum: \[' \
+  | sed 's/.*enum: \[\([^]]*\)\].*/\1/' | grep -o '"[a-z_]*"' | tr -d '"')
+ST_DESC=$(tool_block listLeadSignals | grep -m1 'description: "' | grep -o 'type ([^)]*)' | head -1 \
+  | sed 's/^type (//; s/)$//' | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep . || true)
+ST_ENUM_N=$(zaehle "$ST_ENUM"); ST_DESC_N=$(zaehle "$ST_DESC")
+
+# Nicht-Leer-Guards zuerst (§18a a/c): ein umformatiertes enum liefert "", und
+# "" ist gegen "" gleich.
+if [ "$ST_ENUM_N" -eq 0 ]; then
+  ko "Signaltypen: enum von updateLeadSignal nicht gefunden — umbenannt oder umformatiert? (§18a c)"
+elif [ "$ST_DESC_N" -eq 0 ]; then
+  ko "Signaltypen: Aufzaehlung 'type (…)' in der listLeadSignals-Beschreibung nicht gefunden (§18a c)"
+else
+  # Mengenvergleich sortiert mit -u und saehe eine Dublette nicht.
+  DUP=$(printf '%s\n' "$ST_ENUM" | sort | uniq -d | tr '\n' ' ')
+  DUPD=$(printf '%s\n' "$ST_DESC" | sort | uniq -d | tr '\n' ' ')
+  if [ -z "$DUP$DUPD" ]; then
+    ok "Signaltypen: keine Dubletten (enum $ST_ENUM_N, Beschreibung $ST_DESC_N)"
+  else
+    ko "Signaltypen doppelt — enum: ${DUP:-–}; Beschreibung: ${DUPD:-–}"
+  fi
+
+  # (1) enum ≡ Beschreibung, beide Richtungen in einer Aussage.
+  NUR_E=$(nur_in "$ST_ENUM" "$ST_DESC"); NUR_D=$(nur_in "$ST_DESC" "$ST_ENUM")
+  if [ -z "$NUR_E$NUR_D" ]; then
+    ok "Signaltypen: enum(updateLeadSignal) ≡ Beschreibung(listLeadSignals), $ST_ENUM_N Typen"
+  else
+    ko "Signaltypen weichen ab — nur im enum: ${NUR_E:-–}; nur in der listLeadSignals-Beschreibung: ${NUR_D:-–}"
+  fi
+
+  # (2) beide gegen SIGNAL_TYPES — nur mit lesbarer Quelle.
+  if [ -r "$SIGNAL_TYPES_SRC" ]; then
+    ST_SRC=$(awk '/export const SIGNAL_TYPES = \[/{f=1} f{print} f && /\]/{exit}' "$SIGNAL_TYPES_SRC" \
+      | grep -o '"[a-z_]*"' | tr -d '"')
+    ST_SRC_N=$(zaehle "$ST_SRC")
+    if [ "$ST_SRC_N" -eq 0 ]; then
+      ko "SIGNAL_TYPES in $SIGNAL_TYPES_SRC gelesen, aber leer — Format geaendert? (§18a c)"
+    else
+      for PAAR in "enum(updateLeadSignal)|$ST_ENUM" "Beschreibung(listLeadSignals)|$ST_DESC"; do
+        NAME=${PAAR%%|*}; LISTE=${PAAR#*|}
+        FEHLT=$(nur_in "$ST_SRC" "$LISTE"); UEBER=$(nur_in "$LISTE" "$ST_SRC")
+        if [ -z "$FEHLT$UEBER" ]; then
+          ok "Signaltypen: $NAME ≡ SIGNAL_TYPES ($ST_SRC_N Typen)"
+        else
+          ko "Signaltypen: $NAME gegen SIGNAL_TYPES — fehlt: ${FEHLT:-–}; ueberzaehlig: ${UEBER:-–}"
+        fi
+      done
+    fi
+  else
+    notiz "SIGNAL_TYPES nicht lesbar ($SIGNAL_TYPES_SRC) — Abgleich gegen die Quelle NICHT gelaufen, nur enum ≡ Beschreibung"
   fi
 fi
 
