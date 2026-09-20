@@ -245,9 +245,35 @@ Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
 **kein `workflow`**. Ein blanker `git push` greift immer zuerst auf ihn zu und scheitert,
 sobald der Commit eine Workflow-Datei anfasst.
 
-Es braucht das fine-grained PAT **und** einen leeren `-c credential.helper=` als **ersten**
-Eintrag, der die geerbte Helper-Liste zurücksetzt. Ohne den leeren Eintrag ist git fertig,
-bevor der eigene Helper drankommt — **und die Fehlermeldung nennt den Grund nicht.**
+Es braucht das fine-grained PAT **und** einen Reset der Helper-Liste — aber auf **der
+Ebene, auf der sie eingetragen ist**:
+
+```bash
+git -c credential.helper= \
+    -c credential.https://github.com.helper= \
+    -c credential.https://github.com.helper=<pfad-zum-helfer-skript> \
+    push origin <branch>
+```
+
+⚠️ **Ein generisches `-c credential.helper=` allein reicht NICHT.** Genau das stand hier
+bis zum 20.09.2026, und es ist an dem Tag beim ersten Push mit einer Workflow-Datei
+durchgefallen. `~/.gitconfig` trägt den gh-Helper **URL-gebunden** ein
+(`credential.https://github.com.helper`, dazu `https://gist.github.com`); git führt die
+generische und die URL-gebundene Liste **getrennt**, und wer die eine leert, lässt die
+andere unberührt. Der Push lief deshalb weiter über `gh auth git-credential` und einen
+VS-Code-Askpass und endete in `remote: No anonymous write access` — **einer Meldung, die
+von Workflow-Rechten kein Wort sagt.** Wer sie für die erwartete Ablehnung hält, sucht am
+falschen Ort.
+
+⚠️ **Den Token über ein Helfer-Skript holen, nicht über `$(…)` im Kommando.** Das Skript
+gibt `username=x-access-token` und `password=<token>` aus und hält den Wert damit aus
+Kommandotext, Shell-Verlauf und Hook-Ereignis heraus. Es **braucht das Exec-Bit**: ohne
+meldet git nur `Permission denied` für den Helfer und fällt stumm auf die nächste Ebene
+zurück — dieselbe Fehlermeldung wie oben, wieder ohne den Grund zu nennen.
+
+*(Am 20.09.2026 so verifiziert: Push von `fix/oauth-transport` mit geänderter `ci.yml`
+ging durch. Das PAT trägt die Workflow-Berechtigung also; was es vorher nicht belegt,
+ist der Server — geprüft wird erst beim Push.)*
 
 ---
 
