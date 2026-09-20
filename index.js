@@ -1357,12 +1357,20 @@ export default {
           } catch (e) { console.error("API token lookup error:", e); }
         } else {
           try {
-            const tokenLookup = await fetch(
-              `${env.SUPABASE_URL}/rest/v1/oauth_tokens?access_token=eq.${token}&select=*`,
-              { headers: sbHeaders(env) }
-            );
-            if (tokenLookup.ok) {
-              const tokenRows = await tokenLookup.json();
+            // ⚠️ RPC STATT PostgREST-FILTER. `?access_token=eq.<wert>` schrieb das
+            // Credential in jede Gateway-Logzeile — gemessen 153 solche Aufrufe in
+            // 24 Stunden (SPEC-geheimwerte-im-querystring.md). Die RPC nimmt den
+            // Wert im POST-Body, und der Body wird nicht protokolliert.
+            //
+            // Sie gibt `refresh_token` bewusst NICHT zurueck: dieser Pfad liest ihn
+            // nicht (nur expires_at, user_token, is_demo, mcp_client, lang), und wer
+            // den access_token haelt, braucht das Refresh-Geheimnis hier nicht.
+            //
+            // ⚠️ expires_at ist `bigint` (Millisekunden), genau wie die Zeile
+            // geschrieben wird. Kaeme dort ein Zeitstempel-String an, waere
+            // Number() NaN — und JEDES Token gaelte still als abgelaufen.
+            const { data: tokenRows, ok: lookupOk } = await callRpc("gk_oauth_token_by_access", { p_access_token: token });
+            if (lookupOk && Array.isArray(tokenRows)) {
               if (tokenRows.length && Number(tokenRows[0].expires_at) > Date.now()) {
                 userToken = tokenRows[0].user_token || null;
                 isDemo = tokenRows[0].is_demo === true;
@@ -4451,12 +4459,11 @@ if (name === "getChapterOverview") {
         const code_verifier = body.code_verifier;
         if (!code || !client_id) return json({ error: "invalid_request" }, 400);
 
-        const codeResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes?code=eq.${code}`, {
-          headers: sbHeaders(env),
-        });
-        if (!codeResponse.ok) return json({ error: "server_error" }, 500);
-        const rows = await codeResponse.json();
-        if (!rows.length) return json({ error: "invalid_grant" }, 400);
+        // RPC statt `?code=eq.<wert>`: der Code ist das Einloesegeheimnis des
+        // authorization_code-Grants und gehoert nicht in einen Query-String.
+        const { data: rows, ok: codeOk } = await callRpc("gk_oauth_code_by_code", { p_code: code });
+        if (!codeOk) return json({ error: "server_error" }, 500);
+        if (!Array.isArray(rows) || !rows.length) return json({ error: "invalid_grant" }, 400);
         const stored = rows[0];
         if (Number(stored.expires_at) < Date.now()) return json({ error: "invalid_grant" }, 400);
         if (body.redirect_uri && stored.redirect_uri !== body.redirect_uri) return json({ error: "invalid_grant" }, 400);
@@ -4470,7 +4477,9 @@ if (name === "getChapterOverview") {
           if (computed !== stored.code_challenge) return json({ error: "invalid_grant" }, 400);
         }
 
-        await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes?code=eq.${code}`, {
+        // Geloescht wird ueber den nicht-geheimen Handle aus DEMSELBEN Lookup
+        // (oauth_codes.id, supabase#124) — nicht ueber den Code selbst.
+        await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes?id=eq.${stored.id}`, {
           method: "DELETE", headers: sbHeaders(env),
         });
 
@@ -4491,17 +4500,19 @@ if (name === "getChapterOverview") {
         const refresh_token = body.refresh_token;
         if (!refresh_token) return json({ error: "invalid_request" }, 400);
 
-        const tokenResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_tokens?refresh_token=eq.${refresh_token}`, {
-          headers: sbHeaders(env),
-        });
-        if (!tokenResponse.ok) return json({ error: "server_error" }, 500);
-        const tokenRows = await tokenResponse.json();
-        if (!tokenRows.length) return json({ error: "invalid_grant" }, 400);
+        // RPC statt `?refresh_token=eq.<wert>`. Dieselbe Form wie beim
+        // Access-Token-Lookup; die Zeile traegt die id, ueber die der PATCH
+        // darunter filtert.
+        const { data: tokenRows, ok: refreshOk } = await callRpc("gk_oauth_token_by_refresh", { p_refresh_token: refresh_token });
+        if (!refreshOk) return json({ error: "server_error" }, 500);
+        if (!Array.isArray(tokenRows) || !tokenRows.length) return json({ error: "invalid_grant" }, 400);
         const storedToken = tokenRows[0];
         if (Number(storedToken.refresh_expires_at) < Date.now()) return json({ error: "invalid_grant" }, 400);
 
         const new_access_token = crypto.randomUUID();
-        await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_tokens?refresh_token=eq.${refresh_token}`, {
+        // Wie beim DELETE oben: geschrieben wird ueber oauth_tokens.id aus dem
+        // Lookup, nicht ueber das Refresh-Geheimnis.
+        await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_tokens?id=eq.${storedToken.id}`, {
           method: "PATCH",
           headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
           body: JSON.stringify({ access_token: new_access_token, expires_at: Date.now() + 3600 * 1000 }),
