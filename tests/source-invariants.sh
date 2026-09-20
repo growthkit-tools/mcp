@@ -174,6 +174,49 @@ else
   fi
 fi
 
+# --- Geheimwerte nicht im Query-String (Tranche 1, Teil B) --------------------
+# WARUM HIER. Die Laufzeit-Assertion steht in tests/oauth-transport.sh und misst,
+# was der Worker tatsaechlich auf die Leitung legt. Sie braucht eine Instanz.
+# Diese hier ist die quellreine Haelfte: ein PostgREST-Filter auf einen
+# Geheimwert ist im Text erkennbar, und der unit-Job wird nie uebersprungen.
+#
+# Der Mechanismus, gegen den beide stehen: `?<spalte>=eq.<wert>` landet
+# vollstaendig im Gateway-Log. Gemessen am 20.09.2026: 153 solche Aufrufe in
+# 24 Stunden allein auf oauth_tokens (SPEC-geheimwerte-im-querystring.md).
+#
+# ⚠️ KOMMENTARZEILEN RAUS, und das ist nicht Bequemlichkeit: an allen fuenf
+# umgebauten Stellen steht der ALTE Weg als Zitat im Kommentar daneben („RPC
+# statt `?access_token=eq.<wert>`"). Ein Grep ueber die ganze Datei faende
+# seine eigene Dokumentation und waere dauerhaft rot — dieselbe Selbsttreffer-
+# Falle wie beim Marker-Scan weiter unten. Eine Zeile mit echtem Code trifft
+# weiterhin, auch mit angehaengtem Kommentar.
+SQ_MUSTER='\?(access_token|refresh_token|code|user_token|invite_token|token_hash)=eq\.'
+SQ_TREFFER=$(awk -v m="$SQ_MUSTER" '!/^[[:space:]]*\/\// && $0 ~ m { print NR": "$0 }' "$SRC")
+if [ -z "$SQ_TREFFER" ]; then
+  ok "Kein PostgREST-Filter auf einen Geheimwert in index.js"
+else
+  ko "Geheimwert im Query-String — der Wert landet im Gateway-Log:"
+  printf '%s\n' "$SQ_TREFFER" | head -5 | sed 's/^/      /'
+fi
+
+# ⚠️ POSITIVKONTROLLE (§17a). „0 Treffer" oben ist ohne sie nicht von einem
+# kaputten Muster zu unterscheiden: ein Tippfehler im Regex, eine umbenannte
+# Datei, und die Zeile bleibt fuer immer gruen. Der ERSETZUNGSWEG muss also
+# nachweisbar dastehen — die beiden Schreibzugriffe filtern seit Tranche 1 auf
+# die nicht-geheime id (PATCH oauth_tokens, DELETE oauth_codes).
+# Gesucht wird der Ersetzungsweg BEIDER Schreibzugriffe namentlich, nicht eine
+# Anzahl: `?id=eq.` steht auch bei den Reminders und wuerde eine Zaehlung schon
+# vor dem Umbau erfuellen.
+SQ_FEHLT=""
+for T in oauth_tokens oauth_codes; do
+  grep -qE "$T\?id=eq\." "$SRC" || SQ_FEHLT="$SQ_FEHLT $T"
+done
+if [ -z "$SQ_FEHLT" ]; then
+  ok "Der Ersetzungsweg ist da: oauth_tokens und oauth_codes filtern auf ?id=eq. (Instrument nachweislich scharf)"
+else
+  ko "Kein ?id=eq.-Filter fuer:$SQ_FEHLT — entweder ist der Ersetzungsweg weg, oder der Grep misst nicht, was er soll (§17a)"
+fi
+
 # --- Repo-Hygiene · Exec-Bit, Ignore-Regeln, keine getrackten Secrets ---------
 # Zwei Fehlerklassen, die bisher nur auffielen, weil Chris beim Push-Stopp auf den
 # Commit-Stack gesehen hat: ein Testskript ohne Exec-Bit (#3) und ein ungeignortes

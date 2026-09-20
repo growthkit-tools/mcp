@@ -186,13 +186,29 @@ if [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SECRET_KEY:-}" ]; then
   case "$SUPABASE_SECRET_KEY" in
     eyJ*) HDR+=(-H "Authorization: Bearer ${SUPABASE_SECRET_KEY}") ;;
   esac
-  CODE_HTTP=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X DELETE \
-    "${SUPABASE_URL%/}/rest/v1/oauth_tokens?access_token=eq.${TOK}" \
-    "${HDR[@]}" -H "Prefer: return=minimal")
-  case "$CODE_HTTP" in
-    2*) ok "die erzeugte oauth_tokens-Zeile ist geloescht (HTTP $CODE_HTTP)" ;;
-    *)  ko "Loeschen fehlgeschlagen (HTTP $CODE_HTTP) — die Zeile laeuft in einer Stunde ab" ;;
-  esac
+  # ⚠️ ZWEI SCHRITTE STATT EINEM — derselbe Umbau wie im Worker (Tranche 1,
+  # Teil B, SPEC-fix-tranche-1-echte-credentials.md). Diese Suite laeuft gegen
+  # eine DEPLOYTE Flaeche, und `?access_token=eq.<wert>` haette den frisch
+  # erzeugten Demo-Token in die Gateway-Logs geschrieben — ausgerechnet aus dem
+  # Aufraeumschritt heraus. Erst die nicht-geheime id ueber die RPC holen (Wert
+  # im POST-Body), dann ueber die id loeschen.
+  ID=$(curl -s -m 20 -X POST "${SUPABASE_URL%/}/rest/v1/rpc/gk_oauth_token_by_access" \
+    "${HDR[@]}" -H "Content-Type: application/json" \
+    -d "$(jq -cn --arg t "$TOK" '{p_access_token: $t}')" | jq -r '.[0].id // ""')
+  if [ -z "$ID" ]; then
+    # Kein stiller Skip: die Zeile bleibt sonst unbemerkt liegen. Die RPC ist
+    # service_role-only (supabase#124) — "permission denied" heisst falscher
+    # Key, nicht fehlende Migration.
+    ko "gk_oauth_token_by_access liefert keine id — RPC nicht erreichbar, falscher Key oder die Zeile fehlt. Die oauth_tokens-Zeile bleibt und laeuft in einer Stunde ab."
+  else
+    CODE_HTTP=$(curl -s -m 20 -o /dev/null -w '%{http_code}' -X DELETE \
+      "${SUPABASE_URL%/}/rest/v1/oauth_tokens?id=eq.${ID}" \
+      "${HDR[@]}" -H "Prefer: return=minimal")
+    case "$CODE_HTTP" in
+      2*) ok "die erzeugte oauth_tokens-Zeile ist ueber ihre id geloescht (HTTP $CODE_HTTP)" ;;
+      *)  ko "Loeschen fehlgeschlagen (HTTP $CODE_HTTP) — die Zeile laeuft in einer Stunde ab" ;;
+    esac
+  fi
 else
   printf '  \033[33m⚠\033[0m %s\n' "kein SUPABASE_SECRET_KEY in der Umgebung: die erzeugte oauth_tokens-Zeile bleibt und laeuft in einer Stunde ab. Kein Fehler, aber auch keine Aufraeumung."
 fi
