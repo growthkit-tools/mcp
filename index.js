@@ -2494,6 +2494,10 @@ export default {
               end_date: { type: "string", description: "Optional ISO date YYYY-MM-DD. Null = open-ended." },
               success_metric: { type: "object", description: "{ type: 'replies'|'demos'|'sqls'|'pipeline_eur', target: number }" },
               status: { type: "string", enum: ["draft", "active", "paused", "completed", "archived"], description: "Campaign status: draft | active | paused | completed | archived." },
+              // Nachzug zu supabase#118. Ohne diese Property verwirft die
+              // Allowlist den Schluessel, bevor irgendein Handler ihn sieht —
+              // das Gate war ueber den Chat setzbar und ueber MCP nicht.
+              fit_gate_min_score: { type: "integer", description: "Fit-gate threshold on score_fit for THIS campaign, 0 to 100. Default is 60 when unset \u2014 only change it when the user asks. Lower it when a documented signal decides suitability rather than the score: reveal then stops dropping leads that sit just below the default, which is the case this exists for. Pass null to put the campaign back on the default." },
               icp_snapshot: { type: "object", description: "Frozen ICP for this campaign. May be a narrowed variant of the global ICP." },
               persona_snapshot: { type: "object", description: "Frozen target persona for this campaign." },
               product_snapshot: { type: "object", description: "Frozen product info. Schema: { name, description, value_props[], differentiators[], pricing_hint }." },
@@ -4072,9 +4076,14 @@ if (name === "getChapterOverview") {
         } else if (name === "updateCampaign") {
           if (args.scoring !== undefined) payload.scoring = args.scoring;
           payload.campaign_id = args.campaign_id;
+          // ⚠️ ZWEITER FILTER. Die Allowlist oben laesst den Schluessel nur bis
+          // hierher; gebaut wird der Payload aus DIESER Liste. Ein Feld, das
+          // nur an einer der beiden Stellen steht, liefert einen erfolgreichen
+          // Aufruf, der nichts tut.
           const fields = ["name", "description", "offer", "pain_hypothesis", "messaging_angle",
                           "channels", "start_date", "end_date", "success_metric", "status",
-                          "icp_snapshot", "persona_snapshot", "product_snapshot", "notes"];
+                          "icp_snapshot", "persona_snapshot", "product_snapshot", "notes",
+                          "fit_gate_min_score"];
           for (const f of fields) if (args[f] !== undefined) payload[f] = args[f];
         } else if (name === "listCampaignLeads") {
           payload.campaign_id = args.campaign_id;
