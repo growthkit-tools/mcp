@@ -1005,6 +1005,50 @@ buche "$(echo "$R" | jq -r '.result.isError')"
   || ko "409: isError=$(echo "$R" | jq -r '.result.isError') $(echo "$R" | text | head -c 100)"
 
 # ═════════════════════════════════════════════════════════════════════════════
+sec "K · updateCampaign — fit_gate_min_score (Nachzug zu supabase#118)"
+
+# Die Schwelle des Fit-Gates ist seit #118 pro Kampagne setzbar; n8n-embed
+# fuehrt `fit_gate_min_score` in allowedFields. Im Worker hing sie an ZWEI
+# Filtern: der Allowlist gegen inputSchema (Abschnitt F) und der Feldliste im
+# updateCampaign-Zweig des Payloadbaus. Fehlt sie in einem von beiden, ist der
+# Aufruf erfolgreich und tut nichts — der teuerste Ausgang, weil er wie ein
+# Erfolg aussieht.
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" updateCampaign '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","fit_gate_min_score":45,"status":"active","x_erfunden":1}' >/dev/null
+E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+if [ -z "$E" ]; then
+  ko "n8n-embed wurde nicht gerufen — updateCampaign nimmt einen anderen Weg"
+else
+  [ "$(echo "$E" | jq -r '.body.action')" = "update_campaign" ] \
+    && ok "updateCampaign -> action=update_campaign" || ko "falsche action: $(echo "$E" | jq -r '.body.action')"
+  [ "$(echo "$E" | jq -r '.body.fit_gate_min_score | tostring')" = "45" ] \
+    && ok "fit_gate_min_score kommt beim Backend an" \
+    || ko "fit_gate_min_score fehlt im Payload — von der Allowlist oder der Feldliste verworfen: $(echo "$E" | jq -c '.body')"
+  # Zweiter Zeuge aus derselben Feldliste: ohne ihn belegt ein Treffer oben
+  # nicht, dass die Liste ueberhaupt gelesen wird.
+  [ "$(echo "$E" | jq -r '.body.status')" = "active" ] \
+    && ok "status kommt ebenfalls an (die Feldliste wird gelesen)" || ko "status fehlt"
+  # ⚠️ DIESE ZEILE ISOLIERT DIE ALLOWLIST NICHT, und das ist gemessen: bei
+  # updateCampaign liegen ZWEI Filter hintereinander. Eine Injektion, die
+  # `x_erfunden` ins Schema aufnimmt (Allowlist laesst ihn dann durch), blieb
+  # gruen — die Feldliste faengt ihn trotzdem. Geprueft ist hier also die
+  # Kombination; die Allowlist allein steht in Abschnitt F, am
+  # Enrichment-Dispatch, der keine eigene Feldliste hat.
+  [ "$(echo "$E" | jq -r '.body | has("x_erfunden")')" = "false" ] \
+    && ok "ein undeklarierter Schluessel erreicht das Backend nicht (beide Filter zusammen)" || ko "x_erfunden ist durchgekommen"
+fi
+
+# GEGENRICHTUNG: ohne Angabe darf der Adapter KEINEN Wert erfinden. `null` ist
+# im Backend bedeutungstragend (zurueck auf den Standard 60) — ein stillschweigend
+# mitgeschicktes Feld wuerde die Kampagne also zuruecksetzen.
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" updateCampaign '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","status":"paused"}' >/dev/null
+E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+[ "$(echo "$E" | jq -r '.body | has("fit_gate_min_score")')" = "false" ] \
+  && ok "GEGENRICHTUNG: ohne Angabe schickt der Adapter kein fit_gate_min_score" \
+  || ko "der Adapter schickt ungefragt fit_gate_min_score=$(echo "$E" | jq -r '.body.fit_gate_min_score')"
+
+# ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
 
 ANZ=$(wc -l < "$LOG" | tr -d ' ')
