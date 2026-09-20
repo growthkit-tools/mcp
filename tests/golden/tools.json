@@ -785,6 +785,7 @@
       "campaign_id",
       "channels",
       "end_date",
+      "fit_gate_min_score",
       "icp_snapshot",
       "messaging_angle",
       "name",
