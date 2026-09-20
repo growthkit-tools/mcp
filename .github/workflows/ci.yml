@@ -54,6 +54,7 @@ jobs:
           bash -n tests/guard-push.sh
           bash -n tests/pre-commit.sh
           bash -n tests/pipeline-tools.sh
+          bash -n tests/oauth-transport.sh
           bash -n tests/demo-surface.sh
           bash -n tests/deno-lint.sh
           # ⚠️ .githooks/pre-commit steht mit, obwohl die Endung fehlt: git
@@ -334,6 +335,14 @@ jobs:
       # keine Produktionsdaten — deshalb laeuft sie hier im unit-Job, der nie
       # uebersprungen wird, und nicht im probe-Job.
       - run: bash tests/pipeline-tools.sh
+
+      # OAUTH-TRANSPORTWEG (SPEC-fix-tranche-1-echte-credentials.md, Teil B).
+      # Gleiche Bauart und derselbe Grund wie die Zeile darueber: echte
+      # wrangler-dev-Instanz gegen eine fake Supabase. Sie misst, WO die
+      # OAuth-Geheimwerte stehen — Body statt Query-String — und kann deshalb
+      # nicht gegen Produktion laufen, wo sie ihre eigenen Werte in fremde Logs
+      # traegt.
+      - run: bash tests/oauth-transport.sh
 
   # ---------------------------------------------------------------------------
   probe:
