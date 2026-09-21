@@ -1,0 +1,53 @@
+{
+  "found": true,
+  "key_source": "platform",
+  "provider": "hunter",
+  "domain": "kmu-beispiel.invalid",
+  "organization": "Beispiel Medizintechnik GmbH",
+  "pattern": null,
+  "total_results": 3,
+  "emails": [
+    {
+      "email": "info@kmu-beispiel.invalid",
+      "type": "generic",
+      "confidence": 95,
+      "first_name": null,
+      "last_name": null,
+      "position": null,
+      "seniority": null,
+      "department": null,
+      "linkedin": null,
+      "phone": null,
+      "verification_status": null
+    },
+    {
+      "email": "jobs@kmu-beispiel.invalid",
+      "type": "generic",
+      "confidence": 88,
+      "first_name": null,
+      "last_name": null,
+      "position": null,
+      "seniority": null,
+      "department": null,
+      "linkedin": null,
+      "phone": null,
+      "verification_status": null
+    },
+    {
+      "email": "verkauf@kmu-beispiel.invalid",
+      "type": "generic",
+      "confidence": 85,
+      "first_name": null,
+      "last_name": null,
+      "position": null,
+      "seniority": null,
+      "department": null,
+      "linkedin": null,
+      "phone": null,
+      "verification_status": null
+    }
+  ],
+  "routed_to": "hunter",
+  "routing_reason": "Hunter platform",
+  "credits": 1
+}

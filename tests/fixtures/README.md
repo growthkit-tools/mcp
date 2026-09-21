@@ -53,3 +53,42 @@ die drüben, ohne dass es auffällt.
 Denselben Aufruf über `findContacts` fahren, danach erneut anonymisieren — die drei
 Eigenschaften oben müssen erhalten bleiben, sonst prüfen die Tests etwas anderes, ohne rot
 zu werden.
+
+---
+
+## `hunter-find-contacts-nur-generisch.json`
+
+Der Fall aus `SPEC-generische-adressen-sind-keine-kontakte.md`: Hunter liefert für eine
+kleine Firma **nur generische Postfächer**. Gemessen am 21.09.2026, 19:26 (`findContacts`
+im team@-Workspace, Hunter Platform-Key): drei Treffer, **alle** `type: "generic"`
+(`info@`, `jobs@`, `verkauf@`), `first_name` / `last_name` / `position` durchgängig `null`.
+Der Worker schrieb daraufhin `contact_email = info@…` mit `contact_name = null`; der Lead
+trug danach `has_email = true` und wurde vom reveal übersprungen.
+
+### Was aus der Messung stammt
+
+| | |
+|---|---|
+| drei Einträge, **alle** `type: "generic"` | gemessen |
+| `first_name`, `last_name`, `position` je `null` | gemessen |
+| die drei lokalen Teile `info@`, `jobs@`, `verkauf@` | gemessen — sie sind der Gegenstand |
+| Feldnamen, Verschachtelung, Typen | gemessen (dieselbe Hunter-Form wie nebenan) |
+
+### Was **nicht** aus der Messung stammt
+
+⚠️ **Ausdrücklich, damit hier niemand eine Provenienz liest, die es nicht gibt:**
+`confidence` (95/88/85), `organization`, `pattern`, `total_results` und `credits` sind
+**plausibel gesetzt, nicht gemessen**. Sie tragen keine Assertion. Wer einen Test darauf
+stützt, stützt ihn auf eine Erfindung.
+
+### Die Domain ist ersetzt — und zwar anders als nebenan
+
+Die gemessene Firma ist ein realer Lead aus einer Kampagne. Bei
+`hunter-find-contacts-uni-freiburg.json` ist die Domain stehen geblieben, weil sie dort
+das `pattern`-Feld belegt; hier belegt sie nichts — die Aussage steckt in `type` und in den
+lokalen Teilen. In einem **öffentlichen** Repo ist eine Prospect-Domain ohne Belegwert
+nicht nötig, also steht `kmu-beispiel.invalid`.
+
+⚠️ **Wenn dieselbe Fixture drüben in `supabase` entsteht, muss die Ersetzung dort genauso
+erfolgen** — sonst sind es zwei verschiedene Fixtures unter einem Namen, und die Tests hier
+prüfen etwas anderes als die dort, ohne dass es auffällt.
