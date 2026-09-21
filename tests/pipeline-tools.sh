@@ -1038,6 +1038,67 @@ else
     && ok "ein undeklarierter Schluessel erreicht das Backend nicht (beide Filter zusammen)" || ko "x_erfunden ist durchgekommen"
 fi
 
+# ── Zuruecksetzen auf den Standard: echtes null ──────────────────────────────
+# BEFUND, live gemessen am 21.09.2026: Setzen auf 55 lief Ende-zu-Ende durch,
+# Zuruecksetzen auf null scheiterte mit `fit_gate_min_score_invalid`, und das
+# Backend meldete `received: "null"` — einen STRING. Das Schema deklarierte nur
+# `"type": "integer"`, waehrend die Beschreibung "Pass null" sagt; ein Client,
+# der sich an das Schema haelt, kann dann kein echtes JSON-null schicken.
+#
+# (1) Die allgemeine Form des Fehlers: eine Beschreibung verspricht etwas, das
+#     das Schema verbietet. Geprueft ueber den GESAMTEN servierten Katalog,
+#     damit der naechste Fall derselben Art auffaellt und nicht nur dieser.
+KAT=$(mcp "" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+# ⚠️ DIE VERSTOSSPRUEFUNG GEHOERT IN jq, NICHT IN EIN grep UEBER DIE ZEILE.
+# Ein `grep -v null` ueber "pfad<TAB>typ" filtert auch eine Property namens
+# `x_null` weg und meldete sie damit als in Ordnung — der Name entscheidet dann
+# ueber das Ergebnis, nicht der Typ.
+NV_FILTER='[ .result.tools[] | .name as $t | (.inputSchema.properties // {}) | to_entries[]
+    | select((.value.description // "") | test("pass null|set it to null|null to |null puts|null removes"; "i"))
+    | { pfad: "\($t).\(.key)", hat_null: ((([.value.type] | flatten) | index("null")) != null) } ]'
+NULLVERSPRECHEN=$(echo "$KAT" | jq -r "$NV_FILTER | .[] | .pfad")
+NV_BAD=$(echo "$KAT" | jq -r "$NV_FILTER | .[] | select(.hat_null | not) | .pfad" | tr '\n' ' ' | sed 's/ *$//')
+NV_N=$(printf '%s\n' "$NULLVERSPRECHEN" | grep -c . || true)
+# §18a (a): ohne Grundmenge bestuende die Pruefung darunter leer-wahr. Die Zahl
+# steht hier NICHT als Erwartung, nur als Nachweis, dass ueberhaupt etwas drin ist.
+if [ "${NV_N:-0}" -eq 0 ]; then
+  ko "keine Property gefunden, deren Beschreibung null verspricht — Suchmuster kaputt oder Katalog leer (§18a a)"
+else
+  [ -z "$NV_BAD" ] \
+    && ok "alle $NV_N Properties, die null versprechen, fuehren null auch im type" \
+    || ko "Beschreibung verspricht null, Schema verbietet es:$NV_BAD — ein schemakonformer Client kann das nie schicken"
+fi
+
+# (2) Derselbe Fall namentlich, damit die Meldung im Ernstfall nicht gesucht
+#     werden muss.
+# ⚠️ AUF ENTHALTENSEIN PRUEFEN, NICHT AUF GLEICHHEIT. In JSON Schema ist die
+# Reihenfolge einer Typliste bedeutungslos; ein Vergleich gegen
+# '["integer","null"]' waere bei ["null","integer"] rot, ohne dass sich etwas
+# geaendert haette — eine zu breite Assertion, die beim dritten Fehlalarm
+# jemand "repariert".
+FG_TYP=$(echo "$KAT" | jq -c '.result.tools[] | select(.name == "updateCampaign") | .inputSchema.properties.fit_gate_min_score.type')
+FG_OK=$(echo "$KAT" | jq -r '.result.tools[] | select(.name == "updateCampaign")
+  | ([.inputSchema.properties.fit_gate_min_score.type] | flatten) as $t
+  | (($t | index("integer")) != null and ($t | index("null")) != null)')
+[ "$FG_OK" = "true" ] \
+  && ok "updateCampaign.fit_gate_min_score: type fuehrt integer UND null ($FG_TYP)" \
+  || ko "type ist $FG_TYP — null laesst sich damit nicht schicken (Vorbild: scoring)"
+
+# (3) Und der Weg selbst: ein echtes null muss als echtes null ankommen. Damit
+#     ist zugleich gemessen, dass der Worker nichts in einen String verwandelt —
+#     die Frage, die sich von aussen nicht entscheiden liess.
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" updateCampaign '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","fit_gate_min_score":null}' >/dev/null
+E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+[ "$(echo "$E" | jq -r '.body.fit_gate_min_score | type')" = "null" ] \
+  && ok "fit_gate_min_score: null kommt als echtes JSON-null an (keine Stringwandlung)" \
+  || ko "null kommt als $(echo "$E" | jq -r '.body.fit_gate_min_score | type') an: $(echo "$E" | jq -c '.body')"
+# Der Schluessel muss dabei ueberhaupt dastehen — `null` und "weggelassen"
+# bedeuten im Backend Verschiedenes (Standard 60 setzen vs. nichts aendern).
+[ "$(echo "$E" | jq -r '.body | has("fit_gate_min_score")')" = "true" ] \
+  && ok "und der Schluessel wird nicht weggelassen (null heisst zuruecksetzen, nicht 'unveraendert')" \
+  || ko "der Schluessel fehlt im Payload — das Backend aendert dann gar nichts"
+
 # GEGENRICHTUNG: ohne Angabe darf der Adapter KEINEN Wert erfinden. `null` ist
 # im Backend bedeutungstragend (zurueck auf den Standard 60) — ein stillschweigend
 # mitgeschicktes Feld wuerde die Kampagne also zuruecksetzen.
