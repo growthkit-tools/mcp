@@ -77,6 +77,92 @@ const READ_ONLY_TOOLS = new Set([
   "getWorkingMemory", "listTasks", "getOpenTasks",
   "getSeoReport", "getAeoReport",
 ]);
+// ── Enrichment-Rueckschreibpfad (SPEC-enrichment-persistiert-im-chat, T1) ────
+// Bis zum 21.09.2026 gab der Chat-Pfad sein Ergebnis NUR als Text zurueck:
+// `enrichment_data`, `enrichment_provider` und `enriched_at` hatten null
+// Schreibvorkommen im ganzen Functions-Baum, 512 von 512 Leads trugen `{}`.
+// Geschrieben wird jetzt ueber denselben Weg, den campaign-pipeline schon
+// benutzt — update_campaign_lead an n8n-embed, mit `mode: "enrichment"`.
+//
+// ⚠️ `verifyEmail` steht ABSICHTLICH NICHT hier. Es liefert ein Urteil ueber
+// eine Adresse, keine neuen Kontaktdaten; campaign-pipeline schreibt nach der
+// Verifikation ebenfalls die Felder des Aufrufs, der die Daten geliefert hat
+// (find_contacts), nicht die der Verifikation. Die Spec nennt es in T1 mit —
+// was ein Verify schreiben soll, ist aber eine eigene Entscheidung (Statusfeld?
+// Kandidat?), und sie ist hier nicht getroffen.
+const ENRICH_WRITE_BACK = new Set(["enrichCompany", "enrichPerson", "findContacts", "findEmail"]);
+
+// Ein Text, vier Tools. Vier Kopien waeren vier Stellen, die auseinanderlaufen
+// (§7a) — und ausgerechnet dieser Text traegt die Warnung vor der falschen id.
+const ZIEL_LEAD_BESCHREIBUNG = "Optional. The `id` of a lead from listCampaignLeads (that is campaign_leads.id). Pass it whenever you enrich a lead that is already in a campaign: the result is then written back onto that lead. Contact fields are only filled where they are empty \u2014 a hand-curated e-mail is never overwritten, the rival candidate is kept in enrichment_data \u2014 while provider, timestamp and a short raw extract are always recorded, so `enriched_at` afterwards means 'this lead was enriched' instead of being a guess. Without it nothing is stored and you only get the result back, which is the right thing for a company that is not a lead yet. \u26a0 This is NOT the `lead_id` from pipelineStatus' top_10 or listLeadSignals: that one names the company row, and the write fails with lead_not_found. The reply carries `enrichment_write` with what happened.";
+
+// Die drei Metadaten-Spalten eines erfolgreichen Enrichment-Writes.
+//
+// ⚠️ ZWEITE FASSUNG DESSELBEN KONTRAKTS, und das ist bewusst: die erste steht
+// als `baueMeta` in supabase `_shared/enrichment/write-kontrakt.ts` und laeuft
+// unter Deno — dieser Worker kann sie nicht importieren. Der Name ist deshalb
+// derselbe, damit ein Grep ueber beide Repos beide findet. Aendert sich der
+// Kontrakt drueben, gehoert er hier nachgezogen.
+//
+// ⚠️ NUR AUFRUFEN, WENN AUCH GESCHRIEBEN WIRD. Stuenden die Metadaten schon vor
+// dem Feld-Guard da, waere `updates` nie leer, der Guard liefe ins Leere, und
+// jeder erfolglose Lauf zaehlte als angereichert — `enriched_at` gesetzt, Daten
+// keine.
+function baueMeta({ provider, method, confidence, source_url, raw }) {
+  const jetzt = new Date().toISOString();
+  const daten = { method, retrieved_at: jetzt };
+  if (confidence !== undefined && confidence !== null) daten.confidence = confidence;
+  if (source_url) daten.source_url = source_url;
+  if (raw && Object.keys(raw).length > 0) daten.raw = raw;
+  return { enrichment_provider: provider, enriched_at: jetzt, enrichment_data: daten };
+}
+
+// Was aus einer Provider-Antwort auf den Lead darf.
+//
+// ⚠️ DIE FELDNAMEN SIND GELESEN, NICHT GERATEN: dieselben Pfade, die
+// campaign-pipeline liest (resolveUpdates fuer enrich_company, der
+// reveal-Zweig fuer find_contacts/find_email) bzw. n8n-proxy zurueckgibt
+// (`person` bei enrich_person). Beide Formen — mit und ohne `result`-Huelle —
+// weil der Proxy je nach Provider die eine oder die andere liefert.
+//
+// ⚠️ `company_domain` schreibt dieser Pfad NICHT. resolveUpdates setzt sie nur,
+// wenn der Lead noch keine hat; diese Entscheidung braucht den Ist-Wert der
+// Zeile, und den sieht der Worker nicht. Eine gepflegte Domain still zu
+// ersetzen waere schlimmer als sie nicht zu setzen. Sie steht im Rohauszug.
+function enrichUpdates(action, data) {
+  const updates = {};
+  const setze = (schluessel, wert) => { if (wert !== undefined && wert !== null && wert !== "") updates[schluessel] = wert; };
+  let confidence = null;
+  if (action === "enrich_company") {
+    const c = data?.company ?? data?.result?.company ?? {};
+    setze("company_industry", c.industry);
+    if (c.employees !== undefined && c.employees !== null) updates.company_employees = c.employees;
+    setze("company_country", c.country);
+    setze("company_linkedin", c.linkedin_url);
+  } else if (action === "find_contacts") {
+    const k = (data?.result?.contacts ?? data?.contacts ?? [])[0] ?? {};
+    setze("contact_name", k.name ?? k.full_name);
+    setze("contact_role", k.title ?? k.job_title);
+    setze("contact_seniority", k.seniority);
+    setze("contact_linkedin", k.linkedin_url);
+    setze("contact_email", k.email);
+    if (k.confidence !== undefined) confidence = k.confidence;
+  } else if (action === "find_email") {
+    setze("contact_email", data?.result?.email ?? data?.email);
+    const c = data?.result?.confidence ?? data?.confidence;
+    if (c !== undefined) confidence = c;
+  } else if (action === "enrich_person") {
+    const p = data?.person ?? data?.result?.person ?? {};
+    const name = p.name ?? [p.first_name, p.last_name].filter(Boolean).join(" ");
+    setze("contact_name", name);
+    setze("contact_role", p.title ?? p.job_title);
+    setze("contact_seniority", p.seniority);
+    setze("contact_linkedin", p.linkedin_url);
+    setze("contact_email", p.email);
+  }
+  return { updates, confidence };
+}
+
 // Interim monthly cap for mcp_calls (write tools). Real tier limits arrive with
 // packaging (c366dcab) via usage_counters/gk_meter's p_limit. TUNE.
 const MCP_CALLS_LIMIT = 100000;
@@ -2213,6 +2299,7 @@ export default {
             // ausfuehren kann.
             country: { type: "string", description: "Optional hint for resolving the domain from the name: country name or ISO code, e.g. 'CH'. Only used when `domain` is absent." },
             industry: { type: "string", description: "Optional hint for resolving the domain from the name, e.g. 'ERP software'. Only used when `domain` is absent." },
+            campaign_lead_id: { type: "string", description: ZIEL_LEAD_BESCHREIBUNG },
           }},
         },
         {
@@ -2223,6 +2310,7 @@ export default {
             email: { type: "string", description: "Person's email address." },
             linkedin_url: { type: "string", description: "Full LinkedIn profile URL." },
             linkedin_handle: { type: "string", description: "LinkedIn handle/slug (without the full URL)." },
+            campaign_lead_id: { type: "string", description: ZIEL_LEAD_BESCHREIBUNG },
           }},
         },
         {
@@ -2235,6 +2323,7 @@ export default {
             seniority: { type: "string", description: "junior, senior, or executive." },
             department: { type: "string", description: "sales, marketing, it, etc." },
             limit: { type: "integer", description: "Max results. Default: 10." },
+            campaign_lead_id: { type: "string", description: ZIEL_LEAD_BESCHREIBUNG },
           }},
         },
         {
@@ -2247,6 +2336,7 @@ export default {
             first_name: { type: "string", description: "Person's first name." },
             last_name: { type: "string", description: "Person's last name." },
             full_name: { type: "string", description: "Full name (alternative to first_name + last_name)." },
+            campaign_lead_id: { type: "string", description: ZIEL_LEAD_BESCHREIBUNG },
           }},
         },
         {
@@ -3586,6 +3676,11 @@ if (name === "getChapterOverview") {
             if (enrichArgs.name === undefined) enrichArgs.name = enrichArgs.company_name;
             delete enrichArgs.company_name;
           }
+          // T1: das Ziel des Rueckschreibens ist KEIN Provider-Parameter. Es
+          // geht an n8n-embed, nicht an Hunter oder Apollo.
+          const zielLeadId = typeof enrichArgs.campaign_lead_id === "string" && enrichArgs.campaign_lead_id
+            ? enrichArgs.campaign_lead_id : null;
+          delete enrichArgs.campaign_lead_id;
           const enrichPayload = {
             user_token: userToken,
             provider: "enrichment",
@@ -3595,7 +3690,70 @@ if (name === "getChapterOverview") {
 
           try {
             const { data, ok } = await callEdge(EDGE_PROXY_URL, enrichPayload);
-            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data) }], isError: !ok } });
+
+            // ── Rueckschreiben, wenn ein Ziel-Lead bekannt ist ──────────────
+            // Ohne Ziel bleibt es beim heutigen Verhalten: nur zurueckgeben.
+            // "Kein stiller Write ohne Ziel" (Spec §3 T1).
+            let schreib = null;
+            if (ok && zielLeadId && ENRICH_WRITE_BACK.has(name)) {
+              const aktion = enrichActions[name];
+              const { updates, confidence } = enrichUpdates(aktion, data);
+              if (Object.keys(updates).length === 0) {
+                // Kein Write — und vor allem keine nackten Metadaten. Sonst
+                // truege der Lead `enriched_at`, ohne angereichert zu sein.
+                schreib = { persisted: false, reason: "no_usable_fields" };
+              } else {
+                // ⚠️ `provider ?? routed_to`: nur enrich_company/enrich_person
+                // reichen ein `provider`-Feld durch; find_contacts und
+                // find_email setzen ausschliesslich `routed_to`. Wer hier nur
+                // `provider` liest, schreibt in genau diesen beiden Faellen
+                // undefined — also die still leere Spalte, gegen die die Spec
+                // geschrieben ist.
+                Object.assign(updates, baueMeta({
+                  provider: String(data?.provider ?? data?.routed_to ?? "unknown"),
+                  method: aktion,
+                  confidence,
+                  raw: {
+                    routed_to: data?.routed_to ?? null,
+                    routing_reason: data?.routing_reason ?? null,
+                    company_domain: data?.company?.domain ?? data?.result?.company?.domain ?? null,
+                  },
+                }));
+                try {
+                  const { data: wData, ok: wOk } = await callEdge(EDGE_EMBED_URL, {
+                    action: "update_campaign_lead",
+                    user_token: userToken,
+                    // ⚠️ campaign_leads.id, NICHT leads.id — update_campaign_lead
+                    // loest ueber die Mitgliedschaftszeile auf. Eine leads.id
+                    // trifft dort nichts und endet in lead_not_found.
+                    lead_id: zielLeadId,
+                    updates,
+                    // Die Ueberschreib-Politik aus Spec §4: Kontaktfelder nur
+                    // fuellen, wenn leer; die drei Metadaten-Spalten immer.
+                    // Ohne `mode` verhaelt sich die Action wie bisher.
+                    mode: "enrichment",
+                  });
+                  schreib = wOk
+                    ? { persisted: true, campaign_lead_id: zielLeadId, fields: Object.keys(updates) }
+                    : { persisted: false, campaign_lead_id: zielLeadId, error: (wData && wData.error) || "write_failed" };
+                } catch (we) {
+                  console.error("enrichment write-back error:", we);
+                  schreib = { persisted: false, campaign_lead_id: zielLeadId, error: "network_error" };
+                }
+              }
+            }
+
+            // Das Provider-Ergebnis bleibt, wie es war; der Write kommt daneben.
+            const nutzlast = (schreib && data && typeof data === "object" && !Array.isArray(data))
+              ? { ...data, enrichment_write: schreib }
+              : data;
+            // ⚠️ EIN GESCHEITERTER WRITE IST EIN FEHLER. Wer eine
+            // campaign_lead_id mitgibt, will speichern; isError:false waere hier
+            // der stille Erfolg, gegen den dieses Repo sonst ueberall anschreibt.
+            // Ein "nichts Brauchbares gefunden" ist dagegen kein Fehler — es
+            // steht als reason im Ergebnis.
+            const schreibFehler = !!(schreib && schreib.persisted === false && schreib.error);
+            return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(nutzlast) }], isError: !ok || schreibFehler } });
           } catch (e) {
             return json({ jsonrpc: "2.0", id, error: { code: -32000, message: "Enrichment error: " + e.message } });
           }

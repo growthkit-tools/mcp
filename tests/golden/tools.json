@@ -377,6 +377,7 @@
     "meta": null,
     "name": "enrichCompany",
     "props": [
+      "campaign_lead_id",
       "company_name",
       "country",
       "domain",
@@ -389,6 +390,7 @@
     "meta": null,
     "name": "enrichPerson",
     "props": [
+      "campaign_lead_id",
       "email",
       "linkedin_handle",
       "linkedin_url"
@@ -399,6 +401,7 @@
     "meta": null,
     "name": "findContacts",
     "props": [
+      "campaign_lead_id",
       "company",
       "department",
       "domain",
@@ -411,6 +414,7 @@
     "meta": null,
     "name": "findEmail",
     "props": [
+      "campaign_lead_id",
       "company",
       "domain",
       "first_name",
