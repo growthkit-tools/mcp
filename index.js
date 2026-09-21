@@ -176,9 +176,15 @@ function normalisiereKandidaten(antwort) {
     return hunter.map((roh) => {
       const e = roh ?? {};
       const first = text(e.first_name), last = text(e.last_name);
+      const name = text(e.full_name) ?? ([first, last].filter(Boolean).join(" ") || null);
+      const typ = text(e.type);
       return {
-        name: text(e.full_name) ?? ([first, last].filter(Boolean).join(" ") || null),
+        name,
         first_name: first, last_name: last,
+        // SPEC-generische-adressen-sind-keine-kontakte.md §1: ein Kandidat ist
+        // nur dann ein KONTAKT, wenn er eine Person bezeichnet.
+        type: typ,
+        ist_person: typ === "personal" && !!name,
         title: text(e.position),
         email: text(e.email),
         seniority: text(e.seniority),
@@ -210,10 +216,17 @@ function normalisiereKandidaten(antwort) {
       // die Assertion dazu.
       const teile = (voll ?? "").split(/\s+/).filter(Boolean);
       const abt = liste(p.departments).map(text).filter(Boolean);
+      // ⚠️ APOLLO KENNT KEIN `type`. Sein `people[]` sind Personen per
+      // Konstruktion — deshalb `personal` als Vorgabe, aber NUR als Vorgabe:
+      // `ist_person` verlangt zusaetzlich einen Namen, und ein Eintrag ohne
+      // Namen ist auch hier kein Kontakt.
+      const typ = text(p.type) ?? "personal";
       return {
         name: voll,
         first_name: teile.length > 1 ? teile[0] : null,
         last_name: teile.length > 0 ? teile[teile.length - 1] : null,
+        type: typ,
+        ist_person: typ === "personal" && !!voll,
         title: text(p.title),
         email: text(p.email),
         seniority: text(p.seniority),
@@ -245,6 +258,9 @@ function enrichUpdates(action, data) {
   const updates = {};
   const setze = (schluessel, wert) => { if (wert !== undefined && wert !== null && wert !== "") updates[schluessel] = wert; };
   let confidence = null;
+  // Gesetzt, wenn der Provider geliefert hat, aber nichts davon ein Kontakt
+  // ist. Das ist ein anderer Fall als "der Provider hat nichts geliefert".
+  let befund = null;
   if (action === "enrich_company") {
     const c = data?.company ?? data?.result?.company ?? {};
     setze("company_industry", c.industry);
@@ -253,9 +269,27 @@ function enrichUpdates(action, data) {
     setze("company_linkedin", c.linkedin_url);
   } else if (action === "find_contacts") {
     // Reihenfolge bleibt, wie geliefert: Hunter sortiert nach `confidence`,
-    // und „der beste" ist deshalb der erste. Ein Ranking nach Persona-Naehe
-    // waere eine zweite Entscheidung im selben Diff.
-    const k = normalisiereKandidaten(data)[0];
+    // und „der beste" ist deshalb der erste PERSOENLICHE. Ein Ranking nach
+    // Persona-Naehe waere eine zweite Entscheidung im selben Diff.
+    //
+    // ⚠️ NICHT [0], SONDERN DER ERSTE MIT `ist_person`. Gemessen am 21.09.2026
+    // an einem MedTech-KMU: Hunter lieferte drei Treffer, alle `type:
+    // "generic"` (info@, jobs@, verkauf@) mit Namen `null`. Geschrieben wurde
+    // `contact_email = info@…`, `contact_name = null` — der Lead trug danach
+    // `has_email = true` und wurde vom reveal uebersprungen. Eine echte Person
+    // waere dort nie mehr gesucht worden. Kleine Firmen liefern bei Hunter
+    // haeufig NUR generische Postfaecher.
+    const alle = normalisiereKandidaten(data);
+    const k = alle.find((x) => x.ist_person);
+    if (!k && alle.length > 0) {
+      // Kein Kontakt-Write — aber der Versuch bleibt nachvollziehbar, und die
+      // generischen Adressen sind fuer den Telefon-/Zentrale-Pfad etwas wert.
+      befund = {
+        ergebnis: "nur_generisch",
+        generische: alle.map((x) => x.email).filter(Boolean),
+        kandidaten: alle.length,
+      };
+    }
     if (k) {
       setze("contact_name", k.name);
       setze("contact_role", k.title);
@@ -278,7 +312,7 @@ function enrichUpdates(action, data) {
     setze("contact_linkedin", p.linkedin_url);
     setze("contact_email", p.email);
   }
-  return { updates, confidence };
+  return { updates, confidence, befund };
 }
 
 // Interim monthly cap for mcp_calls (write tools). Real tier limits arrive with
@@ -3815,8 +3849,16 @@ if (name === "getChapterOverview") {
             let schreib = null;
             if (ok && zielLeadId && ENRICH_WRITE_BACK.has(name)) {
               const aktion = enrichActions[name];
-              const { updates, confidence } = enrichUpdates(aktion, data);
-              if (Object.keys(updates).length === 0) {
+              const { updates, confidence, befund } = enrichUpdates(aktion, data);
+              // ⚠️ DREI AUSGAENGE, NICHT ZWEI. "nichts Brauchbares" und "nur
+              // generische Postfaecher" sehen beide nach einem leeren `updates`
+              // aus, sind aber Verschiedenes: im zweiten Fall HAT der Provider
+              // geliefert, es war nur kein Kontakt. Der Fall bekommt deshalb
+              // Metadaten (nachvollziehbar, und die Adressen sind fuer den
+              // Telefon-Pfad etwas wert) — aber kein Kontaktfeld, damit der
+              // Lead reveal-faehig bleibt.
+              const nurMetadaten = Object.keys(updates).length === 0 && !!befund;
+              if (Object.keys(updates).length === 0 && !nurMetadaten) {
                 // Kein Write — und vor allem keine nackten Metadaten. Sonst
                 // truege der Lead `enriched_at`, ohne angereichert zu sein.
                 schreib = { persisted: false, reason: "no_usable_fields" };
@@ -3837,6 +3879,22 @@ if (name === "getChapterOverview") {
                     company_domain: data?.company?.domain ?? data?.result?.company?.domain ?? null,
                   },
                 }));
+                if (befund) {
+                  // ⚠️ `kandidaten` HEISST HIER DIE ANZAHL, und der Name
+                  // kollidiert mit `enrichment_data.kandidaten` aus der
+                  // Ueberschreib-Politik (n8n-embed legt dort die
+                  // zurueckgehaltenen Werte als OBJEKT ab). Praktisch treffen
+                  // sich beide nicht: wo kein Kontaktfeld geschrieben wird,
+                  // haelt die Politik auch nichts zurueck. Der Name kommt aus
+                  // der Spec und bleibt deshalb — die Kollision gehoert
+                  // gemeldet, nicht einseitig umbenannt.
+                  updates.enrichment_data = {
+                    ...updates.enrichment_data,
+                    ergebnis: befund.ergebnis,
+                    generische: befund.generische,
+                    kandidaten: befund.kandidaten,
+                  };
+                }
                 try {
                   const { data: wData, ok: wOk } = await callEdge(EDGE_EMBED_URL, {
                     action: "update_campaign_lead",
@@ -3852,7 +3910,16 @@ if (name === "getChapterOverview") {
                     mode: "enrichment",
                   });
                   schreib = wOk
-                    ? { persisted: true, campaign_lead_id: zielLeadId, fields: Object.keys(updates) }
+                    ? {
+                        persisted: true,
+                        // `contact` sagt, ob ein KONTAKT entstanden ist — ein
+                        // geschriebener Datensatz ohne Kontakt ist kein
+                        // Misserfolg, aber auch kein Kontakt.
+                        ...(aktion === "find_contacts" ? { contact: !befund } : {}),
+                        ...(befund ? { reason: befund.ergebnis } : {}),
+                        campaign_lead_id: zielLeadId,
+                        fields: Object.keys(updates),
+                      }
                     : { persisted: false, campaign_lead_id: zielLeadId, error: (wData && wData.error) || "write_failed" };
                 } catch (we) {
                   console.error("enrichment write-back error:", we);
