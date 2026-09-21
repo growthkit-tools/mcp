@@ -94,6 +94,16 @@ const ENRICH_WRITE_BACK = new Set(["enrichCompany", "enrichPerson", "findContact
 
 // Ein Text, vier Tools. Vier Kopien waeren vier Stellen, die auseinanderlaufen
 // (§7a) — und ausgerechnet dieser Text traegt die Warnung vor der falschen id.
+// SPEC-score-fit-sichtbar.md §2. Ein Satz, fuenf Tools — vier Kopien waeren
+// vier Stellen, die auseinanderlaufen (§7a).
+//
+// ANLASS: am 21.09.2026 viermal dieselbe Verwechslung an einem Tag (zweimal
+// Desktop, zweimal der Chat-Agent): `score` mit der Gate-Schwelle verglichen
+// und Leads als "unter Gate" gemeldet, die drin sind. `score` ist bei kalten
+// Leads strukturell niedrig (12-44), weil noch keine Signale da sind — wer ihn
+// gegen 50 oder 60 haelt, bekommt ein falsches Ergebnis, das plausibel aussieht.
+const GATE_SATZ = " The fit gate decides on `score_fit` against `fit_gate_min` (default 60), never on `score`: `score` is the composite that ranks leads INSIDE the gate and is structurally low for cold leads, so comparing it with the threshold is always wrong.";
+
 const ZIEL_LEAD_BESCHREIBUNG = "Optional. The `id` of a lead from listCampaignLeads (that is campaign_leads.id). Pass it whenever you enrich a lead that is already in a campaign: the result is then written back onto that lead. Contact fields are only filled where they are empty \u2014 a hand-curated e-mail is never overwritten, the rival candidate is kept in enrichment_data \u2014 while provider, timestamp and a short raw extract are always recorded, so `enriched_at` afterwards means 'this lead was enriched' instead of being a guess. Without it nothing is stored and you only get the result back, which is the right thing for a company that is not a lead yet. \u26a0 This is NOT the `lead_id` from pipelineStatus' top_10 or listLeadSignals: that one names the company row, and the write fails with lead_not_found. The reply carries `enrichment_write` with what happened.";
 
 // Die drei Metadaten-Spalten eines erfolgreichen Enrichment-Writes.
@@ -2499,7 +2509,7 @@ export default {
         {
           name: "getTopLeads",
           title: "Lead Scoring: Top Leads",
-          description: "Retrieve the highest-scoring leads from the CRM, ranked by ICP fit. Returns company details, contact (if any), 4-dimension score breakdown, and qualitative reasons like 'Industry X — strong match to ICP'. By default filters out leads with <50% data completeness to avoid false-positives from data-sparse ICP matches (e.g. leads where only the contact's seniority matched but industry/employees/country are unknown). Override via filters.min_completeness if you want incomplete leads too. Requires scoreLeads to have been run at least once. Requires Pro plan. Read-only — does not trigger new scoring. Call scoreLeads first if your CRM has new companies or ICP has changed (check icp_version_hash in the response to detect staleness).",
+          description: "Retrieve the highest-scoring leads from the CRM, ranked by ICP fit. Returns company details, contact (if any), 4-dimension score breakdown, and qualitative reasons like 'Industry X — strong match to ICP'. By default filters out leads with <50% data completeness to avoid false-positives from data-sparse ICP matches (e.g. leads where only the contact's seniority matched but industry/employees/country are unknown). Override via filters.min_completeness if you want incomplete leads too. Requires scoreLeads to have been run at least once. Requires Pro plan. Read-only — does not trigger new scoring. Call scoreLeads first if your CRM has new companies or ICP has changed (check icp_version_hash in the response to detect staleness)." + GATE_SATZ,
           inputSchema: {
             type: "object",
             properties: {
@@ -2783,7 +2793,7 @@ export default {
         {
           name: "listCampaignLeads",
           title: "Campaign: List Leads",
-          description: "List leads in a campaign, optionally filtered by lifecycle_stage or enrichment_status. Returns up to 100 per call. Compact rows by default \u2014 id, company name, domain, score, fit_gate, strong_signals, has_email, has_phone, lifecycle_stage \u2014 which is what you need to rank and to decide. For one lead's complete record use getCampaignLeadFields, or pass fields=full.",
+          description: "List leads in a campaign, optionally filtered by lifecycle_stage or enrichment_status. Returns up to 100 per call. Compact rows by default \u2014 id, company name, domain, score, fit_gate, strong_signals, has_email, has_phone, lifecycle_stage \u2014 which is what you need to rank and to decide. For one lead's complete record use getCampaignLeadFields, or pass fields=full." + GATE_SATZ,
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
@@ -2803,7 +2813,7 @@ export default {
         {
           name: "pipelineStatus",
           title: "Pipeline: Status",
-          description: "Show where a campaign's leads stand in the qualification chain. Returns the funnel (how many leads have a domain, firmographics, a score, a signal, an email, a phone), how many candidates each stage currently has, and the top 10 leads by priority. Read-only, spends no credits. Call this FIRST whenever the user asks what to do with a campaign — the pending counts tell you which stage to run next. The gate_column field says which signal column the reveal gate uses; if it reads 'active_signals' the gate is softer than specified and weak signals still count. The reply carries `stages` \u2014 one entry per stage with its pending count and `label_de`/`label_en`. Use those labels when you name a stage to the user; the internal ids (resolve, reveal) are not words a user knows. `contacts` counts three states, not two: `passend`, `andere_rolle`, `fehlt` \u2014 the middle one is the common case that \"has an e-mail\" hides, a contact who is there but in the wrong role.",
+          description: "Show where a campaign's leads stand in the qualification chain. Returns the funnel (how many leads have a domain, firmographics, a score, a signal, an email, a phone), how many candidates each stage currently has, and the top 10 leads by priority. Read-only, spends no credits. Call this FIRST whenever the user asks what to do with a campaign — the pending counts tell you which stage to run next. The gate_column field says which signal column the reveal gate uses; if it reads 'active_signals' the gate is softer than specified and weak signals still count. The reply carries `stages` \u2014 one entry per stage with its pending count and `label_de`/`label_en`. Use those labels when you name a stage to the user; the internal ids (resolve, reveal) are not words a user knows. `contacts` counts three states, not two: `passend`, `andere_rolle`, `fehlt` \u2014 the middle one is the common case that \"has an e-mail\" hides, a contact who is there but in the wrong role." + GATE_SATZ,
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
@@ -2815,7 +2825,7 @@ export default {
         {
           name: "pipelineRun",
           title: "Pipeline: Run Stage",
-          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends 3 credits per lead (13 with with_phone) and resolve spends 1 per lead; score, signals and rescore spend none \u2014 so resolve needs confirm_credits too, not just reveal. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first, and the reply then carries `why_zero` with per-condition `counts` and a finished sentence in `de` and `en`: report that reason, never invent one. `why_zero` is absent whenever there are candidates. Never run this against a demo campaign; it is refused with 403. The response ends with `next`: pending counts per stage (label_de/label_en, why_zero at 0) \u2014 base every next-step suggestion on it, never on chat history.",
+          description: "Run ONE stage of the qualification chain for the next N candidates. Stages in order: resolve \u2192 score \u2192 signals \u2192 reveal \u2192 rescore. ALWAYS call with dry_run=true first and show the user the candidate count and estimated_credits; only after explicit confirmation call again with dry_run=false and confirm_credits set to the number you showed. reveal spends 3 credits per lead (13 with with_phone) and resolve spends 1 per lead; score, signals and rescore spend none \u2014 so resolve needs confirm_credits too, not just reveal. A stage with 0 candidates is not an error \u2014 it means the previous stage has to run first, and the reply then carries `why_zero` with per-condition `counts` and a finished sentence in `de` and `en`: report that reason, never invent one. `why_zero` is absent whenever there are candidates. Never run this against a demo campaign; it is refused with 403. The response ends with `next`: pending counts per stage (label_de/label_en, why_zero at 0) \u2014 base every next-step suggestion on it, never on chat history." + GATE_SATZ,
           inputSchema: {
             type: "object",
             required: ["campaign_id", "stage"],
@@ -2900,7 +2910,7 @@ export default {
         {
           name: "show_callable_leads",
           title: "☎ Show Callable Leads",
-          description: "Render an interactive call card of leads that have a phone number, each with a ☎ Anrufen button. The HUMAN user clicks a button to place a click-to-call from their own verified caller ID. This tool ONLY displays the card — it never places a call itself, and there is no model-callable call tool (UWG § 7: calls are human-initiated only). Optionally scope to one campaign_id; omit it to aggregate all callable leads across the user's campaigns. Use when the user asks to see or call leads (e.g. \"zeig mir anrufbare Leads\", \"welche Leads kann ich anrufen\").",
+          description: "Render an interactive call card of leads that have a phone number, each with a ☎ Anrufen button. The HUMAN user clicks a button to place a click-to-call from their own verified caller ID. This tool ONLY displays the card — it never places a call itself, and there is no model-callable call tool (UWG § 7: calls are human-initiated only). Optionally scope to one campaign_id; omit it to aggregate all callable leads across the user's campaigns. Use when the user asks to see or call leads (e.g. \"zeig mir anrufbare Leads\", \"welche Leads kann ich anrufen\")." + GATE_SATZ,
           _meta: { ui: { resourceUri: "ui://growthkit/lead-call-card", prefersBorder: true } },
           inputSchema: {
             type: "object",
@@ -4083,16 +4093,60 @@ if (name === "getChapterOverview") {
             if (!res.ok) {
               return json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "Failed to load leads: " + JSON.stringify(rows) }], isError: true } });
             }
+            // SPEC-score-fit-sichtbar.md §2: score_fit, fit_gate und fit_gate_min
+            // stehen auf jeder Handlungsflaeche VOR score. Die Werte liegen in der
+            // View campaign_lead_priority (score, score_fit, completeness,
+            // fit_gate, fit_gate_min) und kommen in einer ZWEITEN Abfrage — nicht
+            // ueber eine View-Erweiterung und nicht ueber einen zweiten Join.
+            // Dasselbe Muster faehrt n8n-embed fuer list_campaign_leads
+            // (:2016), aus demselben Grund: die View hat andere Konsumenten.
+            const ids = (Array.isArray(rows) ? rows : []).map(r => r.id).filter(Boolean);
+            const prio = new Map();
+            let prioFehler = null;
+            if (ids.length > 0) {
+              try {
+                const pq = `${env.SUPABASE_URL}/rest/v1/campaign_lead_priority`
+                  + `?campaign_lead_id=in.(${ids.join(",")})`
+                  + `&select=campaign_lead_id,score,score_fit,fit_gate,fit_gate_min`;
+                const pres = await fetch(pq, { headers: sbHeaders(env) });
+                const prows = await pres.json();
+                if (pres.ok && Array.isArray(prows)) {
+                  for (const pr of prows) prio.set(pr.campaign_lead_id, pr);
+                } else {
+                  prioFehler = "priority_unavailable";
+                }
+              } catch (pe) {
+                console.error("callable leads priority error:", pe);
+                prioFehler = "priority_unavailable";
+              }
+            }
             // Flatten the joined identity back to the top level — the card JS and the
             // structuredContent contract both read flat keys (l.contact_name, …).
             const leads = (Array.isArray(rows) ? rows : []).map(r => {
               const lead = r.leads || {};
+              const p = prio.get(r.id);
+              const gescort = !!p && p.score_fit !== null && p.score_fit !== undefined;
               return {
                 campaign_lead_id: r.id,
                 contact_name: lead.contact_name,
                 contact_role: lead.contact_role,
                 company_name: lead.company_name,
                 contact_phone: lead.contact_phone,
+                // ⚠️ DIE REIHENFOLGE IST DIE AUSSAGE. Ein Modell liest die erste
+                // Zahl, die es sieht, gegen die Schwelle, die es kennt. Stuende
+                // `score` zuerst, waere die Erlaeuterung in der Beschreibung ein
+                // Nachtrag gegen den Augenschein — und der Augenschein gewinnt.
+                score_fit: gescort ? p.score_fit : null,
+                fit_gate: gescort ? p.fit_gate === true : false,
+                fit_gate_min: p ? (p.fit_gate_min ?? null) : null,
+                // ⚠️ `grund` STATT EINER STILLEN NULL. "nicht gescort" und
+                // "Priorisierung nicht lesbar" sind zwei Befunde; ohne das Feld
+                // saehen beide wie `score_fit: null` aus, und ein fehlender
+                // Datenweg liesse sich nicht von einem ungescorten Lead
+                // unterscheiden.
+                ...(gescort ? {} : { grund: prioFehler ? "Priorisierung nicht lesbar" : "nicht gescort" }),
+                // Rangfolge innerhalb des Gates, nicht das Gate-Mass.
+                score: p ? (p.score ?? null) : null,
                 call_count: r.call_count ?? 0,
                 last_call_at: r.last_call_at,
                 last_call_status: r.last_call_status,
