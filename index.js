@@ -2497,7 +2497,7 @@ export default {
               // Nachzug zu supabase#118. Ohne diese Property verwirft die
               // Allowlist den Schluessel, bevor irgendein Handler ihn sieht —
               // das Gate war ueber den Chat setzbar und ueber MCP nicht.
-              fit_gate_min_score: { type: "integer", description: "Fit-gate threshold on score_fit for THIS campaign, 0 to 100. Default is 60 when unset \u2014 only change it when the user asks. Lower it when a documented signal decides suitability rather than the score: reveal then stops dropping leads that sit just below the default, which is the case this exists for. Pass null to put the campaign back on the default." },
+              fit_gate_min_score: { type: ["integer", "null"], description: "Fit-gate threshold on score_fit for THIS campaign, 0 to 100. Default is 60 when unset \u2014 only change it when the user asks. Lower it when a documented signal decides suitability rather than the score: reveal then stops dropping leads that sit just below the default, which is the case this exists for. Pass null to put the campaign back on the default." },
               icp_snapshot: { type: "object", description: "Frozen ICP for this campaign. May be a narrowed variant of the global ICP." },
               persona_snapshot: { type: "object", description: "Frozen target persona for this campaign." },
               product_snapshot: { type: "object", description: "Frozen product info. Schema: { name, description, value_props[], differentiators[], pricing_hint }." },
