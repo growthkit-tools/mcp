@@ -104,10 +104,14 @@ LOG="$FIX/anfragen.jsonl"; : > "$LOG"
 # schickt — sie bekaeme dieselbe Antwort auch fuer einen leeren Body.
 cat > "$FIX/fake.mjs" <<'FAKE'
 import { createServer } from "node:http";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
 const LOG = process.env.LOG_PATH;
 const MODE = process.env.FAKE_MODE ?? "echt";
+// Die Hunter-Antwort steht als Datei daneben, samt Provenienz in
+// tests/fixtures/README.md. Eine zweite Kopie im Skript waere die Stelle, die
+// beim naechsten Erneuern vergessen wird.
+const HUNTER_FIXTURE = JSON.parse(readFileSync(process.env.HUNTER_FIXTURE, "utf8"));
 
 // Q3-B2B-Sales-Pilot — gemessen 02.09.2026 (siehe Kopf der Suite).
 const STATUS_Q3 = {
@@ -439,10 +443,22 @@ createServer((req, res) => {
           });
         }
         if (body.action === "find_contacts") {
-          return sende(200, { found: true, routed_to: "apollo", contacts: [{
-            name: "A. Muster", first_name: "A.", last_name: "Muster", title: "Head of Sales",
-            seniority: "head", linkedin_url: "https://linkedin.invalid/in/a-muster",
-            email: "a.muster@lead-c.invalid" }] });
+          // ⚠️ KEIN PROVIDER LIEFERT `contacts`. Hunter gibt `emails[]`
+          // (n8n-proxy:4295), Apollo `people[]` (:4989). Hier stand bis zum
+          // 21.09.2026 eine erfundene `contacts[]`-Form — und weil der Worker
+          // dieselbe erfundene Form las, war der Test gruen, ohne dass der
+          // Schreibpfad je einen Kontakt gesehen haette (supabase#139).
+          // Die Hunter-Antwort kommt deshalb aus der ECHTEN Fixture.
+          if (String(body.params?.domain ?? "").includes("apollo")) {
+            return sende(200, { found: true, provider: "apollo", routed_to: "apollo", people: [{
+              name: "Tobias Beispiel", title: "Library IT Manager", email: "beispielt@apollo.invalid",
+              email_status: "verified", seniority: "senior", departments: ["it", "engineering"],
+              linkedin_url: "https://www.linkedin.com/in/tobias-beispiel" }] });
+          }
+          if (String(body.params?.domain ?? "").includes("leer")) {
+            return sende(200, { found: true, routed_to: "hunter", emails: [] });
+          }
+          return sende(200, HUNTER_FIXTURE);
         }
         if (body.action === "find_email") {
           return sende(200, { found: true, routed_to: "hunter", email: "a.muster@lead-c.invalid", confidence: 0.92 });
@@ -460,7 +476,9 @@ createServer((req, res) => {
 }).listen(Number(process.env.PORT), "127.0.0.1");
 FAKE
 
-LOG_PATH="$LOG" FAKE_MODE="$FAKE_MODE" PORT="$FAKE_PORT" node "$FIX/fake.mjs" &
+HUNTER_FIXTURE="$REPO_ROOT/tests/fixtures/hunter-find-contacts-uni-freiburg.json"
+[ -r "$HUNTER_FIXTURE" ] || { ko "Fixture fehlt: $HUNTER_FIXTURE — der Kandidaten-Test liefe gegen nichts"; ende; exit 2; }
+LOG_PATH="$LOG" FAKE_MODE="$FAKE_MODE" PORT="$FAKE_PORT" HUNTER_FIXTURE="$HUNTER_FIXTURE" node "$FIX/fake.mjs" &
 FAKE_PID=$!
 
 for _ in $(seq 1 40); do
@@ -1220,14 +1238,48 @@ U=$(echo "$W" | jq -c '.body.updates')
   && ok "provider faellt auf routed_to zurueck (find_email traegt kein provider-Feld)" \
   || ko "enrichment_provider: $(echo "$U" | jq -r '.enrichment_provider') — ohne den Fallback stuende hier null"
 
-# ── find_contacts: der beste Kontakt ────────────────────────────────────────
+# ── find_contacts: die ECHTE Hunter-Form ────────────────────────────────────
+# ⚠️ DER FALL AUS supabase#139. Gelesen wurde `contacts[]` mit `name`/`title`/
+# `linkedin_url` — kein Provider liefert das. Hunter gibt `emails[]` mit
+# `first_name`+`last_name`/`position`/`linkedin`, Apollo `people[]`. Selbst mit
+# richtigem Listennamen waeren contact_name und contact_role `undefined`
+# geblieben; deshalb ein Normalisierer und kein Einzeiler.
+#
+# Die Erwartungen stehen woertlich in der Fixture (tests/fixtures/, echter Lauf
+# vom 21.09.2026, personenbezogene Werte strukturgleich ersetzt).
 N0=$(wc -l < "$LOG")
-ruf "$TOK_TEAM" findContacts "{\"domain\":\"lead-c.invalid\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+ruf "$TOK_TEAM" findContacts "{\"domain\":\"uni-freiburg.de\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
 U=$(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')
-[ "$(echo "$U" | jq -r '.contact_name')" = "A. Muster" ] && [ "$(echo "$U" | jq -r '.contact_role')" = "Head of Sales" ] \
-  && ok "findContacts schreibt Name und Rolle des besten Kontakts" || ko "Kontaktfelder fehlen: $U"
+[ "$(echo "$U" | jq -r '.contact_name')" = "Mara Muster" ] \
+  && ok "Hunter: contact_name aus first_name + last_name" || ko "contact_name: $(echo "$U" | jq -r '.contact_name // "fehlt"')"
+[ "$(echo "$U" | jq -r '.contact_role')" = "Chief Technology Advisor" ] \
+  && ok "Hunter: contact_role aus 'position' (nicht 'title')" || ko "contact_role: $(echo "$U" | jq -r '.contact_role // "fehlt"')"
+[ "$(echo "$U" | jq -r '.contact_email')" = "musterm@uni-freiburg.de" ] \
+  && ok "Hunter: contact_email des ersten Kandidaten" || ko "contact_email: $(echo "$U" | jq -r '.contact_email // "fehlt"')"
+[ "$(echo "$U" | jq -r '.contact_linkedin')" = "https://www.linkedin.com/in/mara-muster-1a02a4a7" ] \
+  && ok "Hunter: contact_linkedin aus 'linkedin' (nicht 'linkedin_url')" || ko "contact_linkedin: $(echo "$U" | jq -r '.contact_linkedin // "fehlt"')"
+# ⚠️ Der erste Kandidat der Fixture hat `seniority: null` — genau deshalb steht
+# er an erster Stelle. Ein Normalisierer, der null zu "null" macht, faellt hier.
+[ "$(echo "$U" | jq -r '.contact_seniority // "nicht gesetzt"')" = "nicht gesetzt" ] \
+  && ok "Hunter: seniority null wird nicht als Wert geschrieben" || ko "contact_seniority: $(echo "$U" | jq -r '.contact_seniority')"
 [ "$(echo "$U" | jq -r '.enrichment_data.method')" = "find_contacts" ] \
   && ok "method nennt den Aufruf, der die Daten geliefert hat" || ko "method: $(echo "$U" | jq -r '.enrichment_data.method')"
+
+# GEGENRICHTUNG: die Apollo-Form. Ohne sie prueft der Normalisierer nur einen
+# Provider, und der zweite Zweig waere unbemerkt tot (§18a a).
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" findContacts "{\"domain\":\"apollo.invalid\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+U=$(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')
+[ "$(echo "$U" | jq -r '.contact_name')" = "Tobias Beispiel" ] && [ "$(echo "$U" | jq -r '.contact_role')" = "Library IT Manager" ] \
+  && ok "Apollo: people[] mit name/title wird ebenso erkannt" || ko "Apollo-Form nicht erkannt: $U"
+[ "$(echo "$U" | jq -r '.contact_linkedin')" = "https://www.linkedin.com/in/tobias-beispiel" ] \
+  && ok "Apollo: contact_linkedin aus 'linkedin_url'" || ko "contact_linkedin: $(echo "$U" | jq -r '.contact_linkedin // "fehlt"')"
+
+# Leere Kandidatenliste ist kein Write — und vor allem keine nackten Metadaten.
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" findContacts "{\"domain\":\"leer.invalid\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+[ -z "$(neu_seit "$N0" "/functions/v1/n8n-embed")" ] \
+  && ok "leere Kandidatenliste -> kein Write" || ko "leere Liste wurde geschrieben"
 
 # ── enrich_person ───────────────────────────────────────────────────────────
 N0=$(wc -l < "$LOG")
