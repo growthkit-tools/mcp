@@ -112,6 +112,7 @@ const MODE = process.env.FAKE_MODE ?? "echt";
 // tests/fixtures/README.md. Eine zweite Kopie im Skript waere die Stelle, die
 // beim naechsten Erneuern vergessen wird.
 const HUNTER_FIXTURE = JSON.parse(readFileSync(process.env.HUNTER_FIXTURE, "utf8"));
+const GENERISCH_FIXTURE = JSON.parse(readFileSync(process.env.GENERISCH_FIXTURE, "utf8"));
 
 // Q3-B2B-Sales-Pilot — gemessen 02.09.2026 (siehe Kopf der Suite).
 const STATUS_Q3 = {
@@ -479,6 +480,24 @@ createServer((req, res) => {
           if (String(body.params?.domain ?? "").includes("leer")) {
             return sende(200, { found: true, routed_to: "hunter", emails: [] });
           }
+          // Nur generische Postfaecher — der gemessene Fall aus
+          // SPEC-generische-adressen-sind-keine-kontakte.md.
+          if (String(body.params?.domain ?? "").includes("generisch")) {
+            return sende(200, GENERISCH_FIXTURE);
+          }
+          // Gemischt: generisch ZUERST, dann eine Person. Aus beiden Fixtures
+          // zusammengesetzt statt erfunden — die Reihenfolge ist der Gegenstand,
+          // denn `[0]` waere hier das Postfach.
+          // `personal` OHNE Namen: nach §1 ebenfalls kein Kontakt. Ohne diesen
+          // Fall prueft nichts die zweite Haelfte der Regel — `type` allein
+          // waere gruen.
+          if (String(body.params?.domain ?? "").includes("namenlos")) {
+            const e = { ...GENERISCH_FIXTURE.emails[0], type: "personal", email: "kontakt@kmu-beispiel.invalid" };
+            return sende(200, { ...GENERISCH_FIXTURE, emails: [e] });
+          }
+          if (String(body.params?.domain ?? "").includes("gemischt")) {
+            return sende(200, { ...HUNTER_FIXTURE, emails: [GENERISCH_FIXTURE.emails[0], HUNTER_FIXTURE.emails[0]] });
+          }
           return sende(200, HUNTER_FIXTURE);
         }
         if (body.action === "find_email") {
@@ -498,8 +517,12 @@ createServer((req, res) => {
 FAKE
 
 HUNTER_FIXTURE="$REPO_ROOT/tests/fixtures/hunter-find-contacts-uni-freiburg.json"
-[ -r "$HUNTER_FIXTURE" ] || { ko "Fixture fehlt: $HUNTER_FIXTURE — der Kandidaten-Test liefe gegen nichts"; ende; exit 2; }
-LOG_PATH="$LOG" FAKE_MODE="$FAKE_MODE" PORT="$FAKE_PORT" HUNTER_FIXTURE="$HUNTER_FIXTURE" node "$FIX/fake.mjs" &
+GENERISCH_FIXTURE="$REPO_ROOT/tests/fixtures/hunter-find-contacts-nur-generisch.json"
+for f in "$HUNTER_FIXTURE" "$GENERISCH_FIXTURE"; do
+  [ -r "$f" ] || { ko "Fixture fehlt: $f — die Kandidaten-Tests liefen gegen nichts"; ende; exit 2; }
+done
+LOG_PATH="$LOG" FAKE_MODE="$FAKE_MODE" PORT="$FAKE_PORT" HUNTER_FIXTURE="$HUNTER_FIXTURE" \
+  GENERISCH_FIXTURE="$GENERISCH_FIXTURE" node "$FIX/fake.mjs" &
 FAKE_PID=$!
 
 for _ in $(seq 1 40); do
@@ -1301,6 +1324,66 @@ N0=$(wc -l < "$LOG")
 ruf "$TOK_TEAM" findContacts "{\"domain\":\"leer.invalid\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
 [ -z "$(neu_seit "$N0" "/functions/v1/n8n-embed")" ] \
   && ok "leere Kandidatenliste -> kein Write" || ko "leere Liste wurde geschrieben"
+
+# ── Generische Postfaecher sind keine Kontakte ──────────────────────────────
+# GEMESSEN am 21.09.2026: Hunter lieferte fuer ein MedTech-KMU drei Treffer,
+# alle `type: "generic"` (info@, jobs@, verkauf@) mit Namen `null`. Geschrieben
+# wurde `contact_email = info@…` mit `contact_name = null` — der Lead trug
+# danach `has_email = true` und wurde vom reveal uebersprungen. Eine echte
+# Person waere dort nie mehr gesucht worden.
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" findContacts "{\"domain\":\"nur-generisch.invalid\",\"campaign_lead_id\":\"$CLID\"}")
+W=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+if [ -z "$W" ]; then
+  ko "kein Write bei nur generischen Adressen — die Metadaten belegen den Versuch, sie gehoeren geschrieben"
+else
+  U=$(echo "$W" | jq -c '.body.updates')
+  # ⚠️ DIE TRAGENDE ASSERTION. Ohne die ist_person-Pruefung stuende hier
+  # info@… — genau der gemessene Schaden.
+  [ "$(echo "$U" | jq -r 'has("contact_email")')" = "false" ] \
+    && ok "kein contact_email aus einem generischen Postfach" \
+    || ko "ESKALATION: generische Adresse als Kontakt geschrieben: $(echo "$U" | jq -r '.contact_email')"
+  [ "$(echo "$U" | jq -r '[keys[] | select(startswith("contact_"))] | length')" = "0" ] \
+    && ok "ueberhaupt kein Kontaktfeld — der Lead bleibt reveal-faehig" \
+    || ko "Kontaktfelder geschrieben: $(echo "$U" | jq -c '[keys[] | select(startswith("contact_"))]')"
+  [ "$(echo "$U" | jq -r '.enrichment_data.ergebnis')" = "nur_generisch" ] \
+    && ok "Metadaten sagen ergebnis=nur_generisch" || ko "ergebnis: $(echo "$U" | jq -r '.enrichment_data.ergebnis // "fehlt"')"
+  [ "$(echo "$U" | jq -r '.enrichment_data.generische | length')" = "3" ] \
+    && [ "$(echo "$U" | jq -r '.enrichment_data.generische[0]')" = "info@kmu-beispiel.invalid" ] \
+    && ok "die drei generischen Adressen stehen in den Metadaten (Telefon-Pfad)" \
+    || ko "generische: $(echo "$U" | jq -c '.enrichment_data.generische // "fehlt"')"
+  [ -n "$(echo "$U" | jq -r '.enriched_at // ""')" ] && [ "$(echo "$U" | jq -r '.enrichment_provider')" = "hunter" ] \
+    && ok "der Versuch ist datiert und dem Provider zugeordnet" || ko "Metadaten unvollstaendig: $U"
+fi
+S=$(echo "$R" | text | jq -c '.enrichment_write')
+[ "$(echo "$S" | jq -r '.persisted')" = "true" ] && [ "$(echo "$S" | jq -r '.contact')" = "false" ] \
+  && [ "$(echo "$S" | jq -r '.reason')" = "nur_generisch" ] \
+  && ok "Rueckgabe: persisted true, contact false, reason nur_generisch" \
+  || ko "enrichment_write: $S"
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "false" ] \
+  && ok "und das ist KEIN Fehler — geschrieben wurde ja, nur kein Kontakt" \
+  || ko "isError=true, obwohl der Write gelungen ist"
+
+# `type: personal`, aber ohne Namen — die zweite Haelfte der Regel.
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" findContacts "{\"domain\":\"namenlos.invalid\",\"campaign_lead_id\":\"$CLID\"}")
+U=$(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')
+[ "$(echo "$U" | jq -r 'has("contact_email")')" = "false" ] \
+  && ok "personal OHNE Namen ist ebenfalls kein Kontakt (§1 verlangt beides)" \
+  || ko "namenloser Eintrag als Kontakt geschrieben: $(echo "$U" | jq -r '.contact_email')"
+
+# ── Gemischt: die Person gewinnt, nicht [0] ─────────────────────────────────
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" findContacts "{\"domain\":\"gemischt.invalid\",\"campaign_lead_id\":\"$CLID\"}")
+U=$(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')
+[ "$(echo "$U" | jq -r '.contact_email')" = "musterm@uni-freiburg.de" ] \
+  && ok "gemischte Liste: der personal-Kandidat wird gewaehlt, nicht das erste Postfach" \
+  || ko "gewaehlt wurde: $(echo "$U" | jq -r '.contact_email // "nichts"')"
+[ "$(echo "$U" | jq -r '.contact_name')" = "Mara Muster" ] \
+  && ok "und sein Name kommt mit" || ko "contact_name: $(echo "$U" | jq -r '.contact_name // "fehlt"')"
+[ "$(echo "$R" | text | jq -r '.enrichment_write.contact')" = "true" ] \
+  && ok "Rueckgabe meldet contact=true" || ko "contact: $(echo "$R" | text | jq -r '.enrichment_write.contact')"
 
 # ── enrich_person ───────────────────────────────────────────────────────────
 N0=$(wc -l < "$LOG")
