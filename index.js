@@ -117,13 +117,115 @@ function baueMeta({ provider, method, confidence, source_url, raw }) {
   return { enrichment_provider: provider, enriched_at: jetzt, enrichment_data: daten };
 }
 
+// Die Kandidaten einer find_contacts-Antwort, in EINER Form.
+//
+// ⚠️ ZWEITE FASSUNG von supabase `_shared/enrichment/kandidaten.ts` (#139).
+// Gleicher Name, damit ein Grep ueber beide Repos beide findet — dieser Worker
+// laeuft nicht unter Deno und kann das Modul nicht importieren. Dieselbe
+// Abmachung wie bei `baueMeta` oben.
+//
+// ANLASS: bis zum 21.09.2026 stand hier
+//
+//     (data?.result?.contacts ?? data?.contacts ?? [])[0]
+//
+// mit den Feldern `name` / `title` / `linkedin_url`. KEIN Provider liefert
+// `contacts`: Hunter gibt `emails[]` (n8n-proxy:4295), Apollo `people[]`
+// (:4989). Der Rueckschreibpfad aus T1 hat deshalb nach findContacts NIE einen
+// Kontakt extrahiert — `updates` blieb leer, und der Aufruf meldete
+// `no_usable_fields`, also einen Nicht-Write, der wie ein Befund aussah.
+//
+// ⚠️ DER LISTENNAME WAR NICHT DER EINZIGE BRUCH. Auch die Feldnamen passten
+// nicht: Hunter liefert `first_name`+`last_name` / `position` / `linkedin`.
+// Selbst mit richtigem Listennamen waeren contact_name und contact_role
+// `undefined` geblieben. Deshalb ein Normalisierer und kein Einzeiler.
+//
+// ⚠️ DER KOMMENTAR, DER HIER STAND, HAT DEN FEHLER MITGETRAGEN: er sagte, die
+// Feldnamen seien „gelesen, nicht geraten — dieselben Pfade, die
+// campaign-pipeline liest". Gelesen waren sie, geraten nicht — aber die Quelle
+// war selbst falsch. Eine Herkunftsangabe belegt, WOHER ein Wert stammt, nicht
+// dass er stimmt.
+function normalisiereKandidaten(antwort) {
+  if (!antwort || typeof antwort !== "object" || Array.isArray(antwort)) return [];
+  const text = (v) => { const t = typeof v === "string" ? v.trim() : ""; return t.length > 0 ? t : null; };
+  const zahl = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+  const liste = (v) => (Array.isArray(v) ? v : []);
+
+  // ⚠️ DER `result`-ZWEIG IST ABSICHERUNG, KEIN BEFUND. n8n-proxy gibt das
+  // Handler-Ergebnis flach zurueck (:272); eine `result`-Huelle ist nirgends
+  // beobachtet. Der Zweig kostet ein `??` und darf nicht als Beleg gelesen
+  // werden, dass es sie gibt.
+  const huelle = (antwort.result && typeof antwort.result === "object" && !Array.isArray(antwort.result))
+    ? antwort.result : antwort;
+  // Ein Fehler oder ein ausdrueckliches found:false ist KEINE leere
+  // Trefferliste mit Nebenwirkung — beides ergibt schlicht keine Kandidaten.
+  if (huelle.error !== undefined && huelle.error !== null) return [];
+  if (huelle.found === false) return [];
+
+  const hunter = liste(huelle.emails);
+  if (hunter.length > 0) {
+    return hunter.map((roh) => {
+      const e = roh ?? {};
+      const first = text(e.first_name), last = text(e.last_name);
+      return {
+        name: text(e.full_name) ?? ([first, last].filter(Boolean).join(" ") || null),
+        first_name: first, last_name: last,
+        title: text(e.position),
+        email: text(e.email),
+        seniority: text(e.seniority),
+        department: text(e.department),
+        linkedin: text(e.linkedin),
+        phone: text(e.phone),
+        // Apollo nennt es `email_status`, Hunter `verification_status` —
+        // dasselbe Ding unter zwei Namen, die Entscheidung faellt hier einmal.
+        verification_status: text(e.verification_status),
+        confidence: zahl(e.confidence),   // Hunter: 0-100, nicht 0-1
+        provider: "hunter",
+      };
+    });
+  }
+  const apollo = liste(huelle.people);
+  if (apollo.length > 0) {
+    return apollo.map((roh) => {
+      const p = roh ?? {};
+      const voll = text(p.name);
+      // Apollo liefert nur `name`. Ein einzelnes Wort ist der Nachname, nicht
+      // der Vorname.
+      //
+      // ⚠️ `first_name`/`last_name` LIEST IN DIESEM REPO NIEMAND — der
+      // Rueckschreibpfad nimmt nur `name`. Drueben braucht sie der
+      // reveal-Zweig, um an find_email und reveal_phone weiterzureichen. Sie
+      // stehen hier, damit beide Fassungen dieselbe Form haben; gemessen am
+      // 21.09.2026: eine Injektion, die die Zerlegung kaputt macht, bleibt
+      // gruen, weil kein Test sie sehen kann. Wer sie hier benutzt, schreibt
+      // die Assertion dazu.
+      const teile = (voll ?? "").split(/\s+/).filter(Boolean);
+      const abt = liste(p.departments).map(text).filter(Boolean);
+      return {
+        name: voll,
+        first_name: teile.length > 1 ? teile[0] : null,
+        last_name: teile.length > 0 ? teile[teile.length - 1] : null,
+        title: text(p.title),
+        email: text(p.email),
+        seniority: text(p.seniority),
+        department: abt.length > 0 ? abt[0] : null,
+        linkedin: text(p.linkedin_url),
+        phone: null,
+        verification_status: text(p.email_status),
+        confidence: null,
+        provider: "apollo",
+      };
+    });
+  }
+  return [];
+}
+
 // Was aus einer Provider-Antwort auf den Lead darf.
 //
-// ⚠️ DIE FELDNAMEN SIND GELESEN, NICHT GERATEN: dieselben Pfade, die
-// campaign-pipeline liest (resolveUpdates fuer enrich_company, der
-// reveal-Zweig fuer find_contacts/find_email) bzw. n8n-proxy zurueckgibt
-// (`person` bei enrich_person). Beide Formen — mit und ohne `result`-Huelle —
-// weil der Proxy je nach Provider die eine oder die andere liefert.
+// ⚠️ DIE FELDNAMEN GEGEN DIE ANTWORTEN GEPRUEFT, nicht gegen einen anderen
+// Aufrufer: enrich_company gegen resolveUpdates UND die Provider-Antwort,
+// find_contacts ueber normalisiereKandidaten oben (der Grund steht dort),
+// enrich_person gegen `person` aus n8n-proxy. Beide Formen — mit und ohne
+// `result`-Huelle —, weil der Zweig Absicherung ist und nichts kostet.
 //
 // ⚠️ `company_domain` schreibt dieser Pfad NICHT. resolveUpdates setzt sie nur,
 // wenn der Lead noch keine hat; diese Entscheidung braucht den Ist-Wert der
@@ -140,13 +242,19 @@ function enrichUpdates(action, data) {
     setze("company_country", c.country);
     setze("company_linkedin", c.linkedin_url);
   } else if (action === "find_contacts") {
-    const k = (data?.result?.contacts ?? data?.contacts ?? [])[0] ?? {};
-    setze("contact_name", k.name ?? k.full_name);
-    setze("contact_role", k.title ?? k.job_title);
-    setze("contact_seniority", k.seniority);
-    setze("contact_linkedin", k.linkedin_url);
-    setze("contact_email", k.email);
-    if (k.confidence !== undefined) confidence = k.confidence;
+    // Reihenfolge bleibt, wie geliefert: Hunter sortiert nach `confidence`,
+    // und „der beste" ist deshalb der erste. Ein Ranking nach Persona-Naehe
+    // waere eine zweite Entscheidung im selben Diff.
+    const k = normalisiereKandidaten(data)[0];
+    if (k) {
+      setze("contact_name", k.name);
+      setze("contact_role", k.title);
+      setze("contact_seniority", k.seniority);
+      setze("contact_linkedin", k.linkedin);
+      setze("contact_email", k.email);
+      setze("contact_phone", k.phone);
+      confidence = k.confidence;
+    }
   } else if (action === "find_email") {
     setze("contact_email", data?.result?.email ?? data?.email);
     const c = data?.result?.confidence ?? data?.confidence;
