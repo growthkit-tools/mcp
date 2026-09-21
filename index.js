@@ -287,7 +287,7 @@ function enrichUpdates(action, data) {
       befund = {
         ergebnis: "nur_generisch",
         generische: alle.map((x) => x.email).filter(Boolean),
-        kandidaten: alle.length,
+        kandidaten_anzahl: alle.length,
       };
     }
     if (k) {
@@ -3880,19 +3880,24 @@ if (name === "getChapterOverview") {
                   },
                 }));
                 if (befund) {
-                  // ⚠️ `kandidaten` HEISST HIER DIE ANZAHL, und der Name
-                  // kollidiert mit `enrichment_data.kandidaten` aus der
-                  // Ueberschreib-Politik (n8n-embed legt dort die
-                  // zurueckgehaltenen Werte als OBJEKT ab). Praktisch treffen
-                  // sich beide nicht: wo kein Kontaktfeld geschrieben wird,
-                  // haelt die Politik auch nichts zurueck. Der Name kommt aus
-                  // der Spec und bleibt deshalb — die Kollision gehoert
-                  // gemeldet, nicht einseitig umbenannt.
+                  // ⚠️ `kandidaten_anzahl` UND NICHT `kandidaten`. Der Name
+                  // `kandidaten` ist in `enrichment_data` bereits vergeben: die
+                  // Ueberschreib-Politik in n8n-embed legt dort die
+                  // zurueckgehaltenen Werte als OBJEKT ab. Die Spec nannte das
+                  // Zahlfeld urspruenglich ebenso; in #54 stand die Kollision
+                  // als Befund im Code, entschieden ist sie hier — ein Name fuer
+                  // zwei Dinge ist die Verwechslung, die man erst bemerkt, wenn
+                  // sie eingetreten ist.
+                  //
+                  // Praktisch treffen sich beide heute nicht: wo kein
+                  // Kontaktfeld geschrieben wird, haelt die Politik nichts
+                  // zurueck. "Heute nicht" ist aber kein Zustand, auf den man
+                  // einen Namen stellt.
                   updates.enrichment_data = {
                     ...updates.enrichment_data,
                     ergebnis: befund.ergebnis,
                     generische: befund.generische,
-                    kandidaten: befund.kandidaten,
+                    kandidaten_anzahl: befund.kandidaten_anzahl,
                   };
                 }
                 try {
