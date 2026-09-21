@@ -343,6 +343,27 @@ createServer((req, res) => {
       res.end(JSON.stringify(daten));
     };
 
+    // Die Anruf-Karte liest zwei Tabellen direkt (kein Edge-Aufruf): die
+    // Mitgliedschaftszeilen und die Prioritaets-View. Zahlen aus
+    // SPEC-score-fit-sichtbar.md §6: score_fit 56, fit_gate true, score 24 —
+    // genau die Konstellation, die am 21.09. viermal falsch gelesen wurde.
+    if (req.url.startsWith("/rest/v1/campaign_leads?")) {
+      return sende(200, [
+        { id: "00000000-0000-4000-8000-0000000000a1", call_count: 0, last_call_at: null, last_call_status: null,
+          leads: { contact_name: "A. Muster", contact_role: "Head of Sales", company_name: "Lead A", contact_phone: "+49 555 0100" } },
+        { id: "00000000-0000-4000-8000-0000000000a2", call_count: 1, last_call_at: "2026-09-20T10:00:00Z", last_call_status: "voicemail",
+          leads: { contact_name: "B. Beispiel", contact_role: "CTO", company_name: "Lead B", contact_phone: "+49 555 0101" } },
+      ]);
+    }
+    if (req.url.startsWith("/rest/v1/campaign_lead_priority?")) {
+      // Nur der ERSTE Lead ist gescort. Der zweite steht in der View mit
+      // score_fit null — der Fall "nicht gescort", der nicht als score 0
+      // erscheinen darf.
+      return sende(200, [
+        { campaign_lead_id: "00000000-0000-4000-8000-0000000000a1", score: 24, score_fit: 56, fit_gate: true, fit_gate_min: 50 },
+        { campaign_lead_id: "00000000-0000-4000-8000-0000000000a2", score: null, score_fit: null, fit_gate: false, fit_gate_min: 50 },
+      ]);
+    }
     if (req.url.startsWith("/rest/v1/rpc/resolve_user_token")) {
       return sende(200, "11111111-1111-1111-1111-111111111111");
     }
@@ -1315,6 +1336,82 @@ buche "$(echo "$R" | jq -r '.result.isError')"
   || ko "Grund fehlt: $(echo "$R" | text | jq -c '.enrichment_write // "fehlt"')"
 [ "$(echo "$R" | text | jq -r '.company.industry')" = "Software" ] \
   && ok "das Provider-Ergebnis geht dabei NICHT verloren" || ko "das Ergebnis ist mit dem Write-Fehler verschwunden"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "M · score_fit vor score (SPEC-score-fit-sichtbar)"
+
+# ANLASS: `score` und `score_fit` heissen fast gleich und messen Verschiedenes.
+# `score_fit` ist das Gate-Mass, `score` die Rangfolge INNERHALB des Gates und
+# bei kalten Leads strukturell niedrig. Am 21.09.2026 wurde das viermal an
+# einem Tag verwechselt — Leads galten als "unter Gate", die drin sind.
+
+# ── Der Satz in den Tool-Beschreibungen ─────────────────────────────────────
+KAT=$(mcp "" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+GATE_TOOLS="pipelineRun pipelineStatus listCampaignLeads getTopLeads show_callable_leads"
+GT_FEHLT=""; GT_N=0
+for t in $GATE_TOOLS; do
+  D=$(echo "$KAT" | jq -r --arg t "$t" '.result.tools[] | select(.name == $t) | .description // ""')
+  [ -n "$D" ] || { GT_FEHLT="$GT_FEHLT $t(nicht im Katalog)"; continue; }
+  GT_N=$((GT_N+1))
+  case "$D" in
+    *"fit gate decides on"*"score_fit"*) : ;;
+    *) GT_FEHLT="$GT_FEHLT $t" ;;
+  esac
+done
+# §18a (a): ohne Grundmenge bestuende die Schleife leer-wahr.
+if [ "$GT_N" -eq 0 ]; then
+  ko "keines der Gate-Tools im Katalog gefunden — Namen geaendert? (§18a a)"
+elif [ -z "$GT_FEHLT" ]; then
+  ok "alle $GT_N Handlungsflaechen tragen den Gate-Satz in der Beschreibung"
+else
+  ko "Gate-Satz fehlt bei:$GT_FEHLT — dort vergleicht ein Agent weiter score mit der Schwelle"
+fi
+# GEGENRICHTUNG: der Satz steht nicht wahllos ueberall — ein Tool ohne
+# Lead-Liste traegt ihn nicht. Sonst pruefte die Schleife nur, DASS irgendein
+# Text da ist.
+D=$(echo "$KAT" | jq -r '.result.tools[] | select(.name == "listMemories") | .description // ""')
+case "$D" in
+  *"fit gate decides on"*) ko "listMemories traegt den Gate-Satz — er steht wahllos im Katalog" ;;
+  *) ok "GEGENRICHTUNG: listMemories traegt ihn nicht" ;;
+esac
+
+# ── Die Zeile der Anruf-Karte ───────────────────────────────────────────────
+# Die EINZIGE Lead-Flaeche, die dieser Worker selbst baut (die anderen vier
+# reicht er durch, ihre Zeilenform gehoert supabase).
+R=$(ruf "$TOK_TEAM" show_callable_leads '{}')
+Z0=$(echo "$R" | jq -c '.result.structuredContent.leads[0] // {}')
+if [ "$(echo "$Z0" | jq -r 'has("campaign_lead_id")')" != "true" ]; then
+  ko "keine Karten-Zeile erhalten: $(echo "$R" | jq -c '.result | {structuredContent}' | head -c 120)"
+else
+  # ⚠️ DIE REIHENFOLGE IST DER GEGENSTAND, nicht die Anwesenheit. Geprueft wird
+  # die POSITION der Schluessel, wie sie beim Client ankommt.
+  POS_FIT=$(echo "$Z0" | jq -r '[keys_unsorted | index("score_fit")] | .[0] // -1')
+  POS_SCORE=$(echo "$Z0" | jq -r '[keys_unsorted | index("score")] | .[0] // -1')
+  if [ "$POS_FIT" -ge 0 ] && [ "$POS_SCORE" -ge 0 ] && [ "$POS_FIT" -lt "$POS_SCORE" ]; then
+    ok "score_fit steht VOR score (Position $POS_FIT vor $POS_SCORE)"
+  else
+    ko "Reihenfolge falsch: score_fit an $POS_FIT, score an $POS_SCORE — $(echo "$Z0" | jq -c 'keys_unsorted')"
+  fi
+  POS_GATE=$(echo "$Z0" | jq -r '[keys_unsorted | index("fit_gate")] | .[0] // -1')
+  POS_MIN=$(echo "$Z0" | jq -r '[keys_unsorted | index("fit_gate_min")] | .[0] // -1')
+  { [ "$POS_GATE" -gt 0 ] && [ "$POS_GATE" -lt "$POS_SCORE" ] && [ "$POS_MIN" -gt 0 ] && [ "$POS_MIN" -lt "$POS_SCORE" ]; } \
+    && ok "fit_gate und fit_gate_min stehen ebenfalls vor score" \
+    || ko "fit_gate ($POS_GATE) / fit_gate_min ($POS_MIN) nicht vor score ($POS_SCORE)"
+  # Die Werte aus §6 der Spec, unveraendert durchgereicht.
+  [ "$(echo "$Z0" | jq -r '.score_fit')" = "56" ] && [ "$(echo "$Z0" | jq -r '.fit_gate')" = "true" ] \
+    && [ "$(echo "$Z0" | jq -r '.fit_gate_min')" = "50" ] && [ "$(echo "$Z0" | jq -r '.score')" = "24" ] \
+    && ok "score_fit 56 / fit_gate true / fit_gate_min 50 / score 24 — der Fall aus der Spec" \
+    || ko "Werte weichen ab: $(echo "$Z0" | jq -c '{score_fit, fit_gate, fit_gate_min, score}')"
+fi
+
+# ── Die ungescorte Zeile sagt es, statt score 0 zu zeigen ───────────────────
+Z1=$(echo "$R" | jq -c '.result.structuredContent.leads[1] // {}')
+[ "$(echo "$Z1" | jq -r '.grund')" = "nicht gescort" ] && [ "$(echo "$Z1" | jq -r '.score_fit')" = "null" ] \
+  && ok "ungescorte Zeile traegt grund='nicht gescort', score_fit null" \
+  || ko "ungescorte Zeile: $(echo "$Z1" | jq -c '{score_fit, fit_gate, grund, score}')"
+[ "$(echo "$Z1" | jq -r '.score')" != "0" ] \
+  && ok "und eben NICHT score 0 — das waere eine Aussage, die niemand gemessen hat" \
+  || ko "die ungescorte Zeile zeigt score 0"
 
 # ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
