@@ -407,6 +407,14 @@ createServer((req, res) => {
           ignored_fields: ignored,
         });
       }
+      if (body.action === "update_campaign_lead") {
+        // Der Fall, den der Auftrag ausdruecklich nennt: aufgeloest wird ueber
+        // campaign_leads.id. Eine leads.id trifft hier nichts.
+        if (body.lead_id === "00000000-0000-4000-8000-000000000011") {
+          return sende(404, { error: "lead_not_found" });
+        }
+        return sende(200, { success: true, lead_id: body.lead_id, updated: Object.keys(body.updates ?? {}) });
+      }
       if (body.action === "update_campaign") return sende(200, UPDATE_CAMPAIGN);
       if (body.action === "list_campaign_leads") {
         return sende(200, body.fields === "full" ? LEADS_FULL : LEADS_COMPACT);
@@ -414,6 +422,37 @@ createServer((req, res) => {
       return sende(400, { error: `unerwartete action: ${body.action}` });
     }
     if (req.url.startsWith("/functions/v1/n8n-proxy")) {
+      // Antwortformen woertlich nach dem, was campaign-pipeline liest
+      // (resolveUpdates, der reveal-Zweig) bzw. n8n-proxy zurueckgibt.
+      // ⚠️ find_email und find_contacts tragen NUR `routed_to`, kein
+      // `provider` — nur enrich_company reicht ein `provider` durch. Genau
+      // daran haengt `provider ?? routed_to` im Metadaten-Kontrakt.
+      if (body.provider === "enrichment") {
+        const firma = body.params?.name ?? "";
+        if (firma === "Fehlerfirma") return sende(502, { error: "provider down" });
+        if (body.action === "enrich_company") {
+          if (firma === "Leerfirma") return sende(200, { found: true, routed_to: "hunter", company: {} });
+          return sende(200, {
+            found: true, provider: "hunter", routed_to: "hunter", routing_reason: "Hunter platform",
+            company: { domain: "lead-c.invalid", industry: "Software", employees: 120, country: "CH",
+                       linkedin_url: "https://linkedin.invalid/company/lead-c" },
+          });
+        }
+        if (body.action === "find_contacts") {
+          return sende(200, { found: true, routed_to: "apollo", contacts: [{
+            name: "A. Muster", first_name: "A.", last_name: "Muster", title: "Head of Sales",
+            seniority: "head", linkedin_url: "https://linkedin.invalid/in/a-muster",
+            email: "a.muster@lead-c.invalid" }] });
+        }
+        if (body.action === "find_email") {
+          return sende(200, { found: true, routed_to: "hunter", email: "a.muster@lead-c.invalid", confidence: 0.92 });
+        }
+        if (body.action === "enrich_person") {
+          return sende(200, { found: true, provider: "apollo", routed_to: "apollo", person: {
+            name: "A. Muster", title: "Head of Sales", seniority: "head",
+            email: "a.muster@lead-c.invalid", linkedin_url: "https://linkedin.invalid/in/a-muster" } });
+        }
+      }
       return sende(200, { found: true, echo_params: body.params ?? null });
     }
     return sende(404, { error: `unerwarteter Pfad: ${req.url}` });
@@ -1108,6 +1147,122 @@ E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
 [ "$(echo "$E" | jq -r '.body | has("fit_gate_min_score")')" = "false" ] \
   && ok "GEGENRICHTUNG: ohne Angabe schickt der Adapter kein fit_gate_min_score" \
   || ko "der Adapter schickt ungefragt fit_gate_min_score=$(echo "$E" | jq -r '.body.fit_gate_min_score')"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "L · Enrichment schreibt zurueck (SPEC-enrichment-persistiert-im-chat, T1)"
+
+# BEFUND der Spec: der Chat-Pfad holte beim Provider und gab das Ergebnis NUR
+# als Text zurueck — `enrichment_data`, `enrichment_provider` und `enriched_at`
+# hatten null Schreibvorkommen, 512 von 512 Leads trugen `{}`. Geschrieben wird
+# ueber denselben Weg, den campaign-pipeline schon benutzt:
+# update_campaign_lead an n8n-embed, mit `mode: "enrichment"`.
+#
+# ⚠️ AUFGELOEST WIRD UEBER campaign_leads.id (n8n-embed:2092), nicht ueber
+# leads.id. Der Fake antwortet auf die leads.id der Fixture deshalb mit 404 —
+# damit ist die Verwechslung hier ein roter Test und kein stiller Nicht-Write.
+CLID="00000000-0000-4000-8000-0000000000a1"   # campaign_leads.id (aus listCampaignLeads)
+LEADID="00000000-0000-4000-8000-000000000011" # leads.id — die FALSCHE fuer diesen Weg
+
+# ── enrich_company: Firmenfelder + die drei Metadaten-Spalten ────────────────
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" enrichCompany "{\"name\":\"Lead C\",\"campaign_lead_id\":\"$CLID\"}")
+W=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+if [ -z "$W" ]; then
+  ko "kein update_campaign_lead nach enrichCompany — das Ergebnis bleibt im Chat (der Befund der Spec)"
+else
+  [ "$(echo "$W" | jq -r '.body.action')" = "update_campaign_lead" ] \
+    && ok "enrichCompany schreibt ueber update_campaign_lead zurueck" || ko "falsche action: $(echo "$W" | jq -r '.body.action')"
+  [ "$(echo "$W" | jq -r '.body.lead_id')" = "$CLID" ] \
+    && ok "Ziel ist die campaign_leads.id aus dem Aufruf" || ko "lead_id ist $(echo "$W" | jq -r '.body.lead_id')"
+  [ "$(echo "$W" | jq -r '.body.mode')" = "enrichment" ] \
+    && ok "mode=enrichment gesetzt (Ueberschreib-Politik der Spec §4)" || ko "mode fehlt: $(echo "$W" | jq -c '.body | {mode}')"
+  U=$(echo "$W" | jq -c '.body.updates')
+  [ "$(echo "$U" | jq -r '.company_industry')" = "Software" ] && [ "$(echo "$U" | jq -r '.company_employees')" = "120" ] \
+    && ok "die aufgeloesten Firmenfelder stehen in updates" || ko "Firmenfelder fehlen: $U"
+  [ "$(echo "$U" | jq -r '.enrichment_provider')" = "hunter" ] \
+    && ok "enrichment_provider = hunter" || ko "enrichment_provider: $(echo "$U" | jq -r '.enrichment_provider')"
+  [ -n "$(echo "$U" | jq -r '.enriched_at // ""')" ] && [ "$(echo "$U" | jq -r '.enrichment_data.method')" = "enrich_company" ] \
+    && ok "enriched_at und enrichment_data.method gesetzt" || ko "Metadaten unvollstaendig: $(echo "$U" | jq -c '{enriched_at, enrichment_data}')"
+fi
+# Das Provider-Ergebnis muss dem Modell erhalten bleiben — der Write kommt dazu,
+# er ersetzt nichts.
+[ "$(echo "$R" | text | jq -r '.company.industry')" = "Software" ] \
+  && ok "das Provider-Ergebnis kommt weiterhin im Text an" || ko "Provider-Ergebnis verschwunden: $(echo "$R" | text | head -c 100)"
+[ "$(echo "$R" | text | jq -r '.enrichment_write.persisted')" = "true" ] \
+  && ok "der Aufrufer erfaehrt, dass geschrieben wurde (enrichment_write.persisted)" \
+  || ko "kein enrichment_write im Ergebnis: $(echo "$R" | text | jq -c '.enrichment_write // "fehlt"')"
+
+# ── NEGATIVKONTROLLE: ohne Ziel-Lead kein Write ─────────────────────────────
+# Die Spec sagt es woertlich: "Kein stiller Write ohne Ziel."
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" enrichCompany '{"name":"Lead C"}')
+[ -z "$(neu_seit "$N0" "/functions/v1/n8n-embed")" ] \
+  && ok "NEGATIVKONTROLLE: ohne campaign_lead_id wird nichts geschrieben" \
+  || ko "ohne Ziel-Lead wurde geschrieben: $(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body')"
+[ "$(echo "$R" | text | jq -r '.company.industry')" = "Software" ] \
+  && ok "und das Ergebnis kommt unveraendert zurueck (heutiges Verhalten)" || ko "Ad-hoc-Anreicherung veraendert"
+
+# ── campaign_lead_id ist KEIN Provider-Parameter ────────────────────────────
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" enrichCompany "{\"name\":\"Lead C\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+X=$(neu_seit "$N0" "/functions/v1/n8n-proxy")
+[ "$(echo "$X" | jq -r '.body.params | has("campaign_lead_id")')" = "false" ] \
+  && ok "campaign_lead_id geht NICHT an den Provider" || ko "der Provider bekommt campaign_lead_id: $(echo "$X" | jq -c '.body.params')"
+
+# ── find_email: provider faellt auf routed_to zurueck ───────────────────────
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" findEmail "{\"domain\":\"lead-c.invalid\",\"first_name\":\"A.\",\"last_name\":\"Muster\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+W=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+U=$(echo "$W" | jq -c '.body.updates')
+[ "$(echo "$U" | jq -r '.contact_email')" = "a.muster@lead-c.invalid" ] \
+  && ok "findEmail schreibt contact_email zurueck" || ko "contact_email fehlt: $U"
+[ "$(echo "$U" | jq -r '.enrichment_provider')" = "hunter" ] \
+  && ok "provider faellt auf routed_to zurueck (find_email traegt kein provider-Feld)" \
+  || ko "enrichment_provider: $(echo "$U" | jq -r '.enrichment_provider') — ohne den Fallback stuende hier null"
+
+# ── find_contacts: der beste Kontakt ────────────────────────────────────────
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" findContacts "{\"domain\":\"lead-c.invalid\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+U=$(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')
+[ "$(echo "$U" | jq -r '.contact_name')" = "A. Muster" ] && [ "$(echo "$U" | jq -r '.contact_role')" = "Head of Sales" ] \
+  && ok "findContacts schreibt Name und Rolle des besten Kontakts" || ko "Kontaktfelder fehlen: $U"
+[ "$(echo "$U" | jq -r '.enrichment_data.method')" = "find_contacts" ] \
+  && ok "method nennt den Aufruf, der die Daten geliefert hat" || ko "method: $(echo "$U" | jq -r '.enrichment_data.method')"
+
+# ── enrich_person ───────────────────────────────────────────────────────────
+N0=$(wc -l < "$LOG")
+ruf "$TOK_TEAM" enrichPerson "{\"email\":\"a.muster@lead-c.invalid\",\"campaign_lead_id\":\"$CLID\"}" >/dev/null
+U=$(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')
+[ "$(echo "$U" | jq -r '.contact_email')" = "a.muster@lead-c.invalid" ] && [ "$(echo "$U" | jq -r '.enrichment_provider')" = "apollo" ] \
+  && ok "enrichPerson schreibt den Kontakt zurueck" || ko "enrichPerson-Write unvollstaendig: $U"
+
+# ── Kein Write ohne brauchbare Felder, und keiner nach einem Providerfehler ─
+# ⚠️ BEIDE FAELLE ZUSAMMEN, weil sie dieselbe Regel tragen: die Metadaten
+# duerfen NIE allein dastehen. Sonst zaehlte jeder erfolglose Lauf als
+# angereichert — `enriched_at` gesetzt, Daten keine.
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" enrichCompany "{\"name\":\"Leerfirma\",\"campaign_lead_id\":\"$CLID\"}")
+[ -z "$(neu_seit "$N0" "/functions/v1/n8n-embed")" ] \
+  && ok "keine brauchbaren Felder -> kein Write (auch keine nackten Metadaten)" \
+  || ko "leeres Ergebnis wurde als Anreicherung geschrieben: $(neu_seit "$N0" "/functions/v1/n8n-embed" | jq -c '.body.updates')"
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" enrichCompany "{\"name\":\"Fehlerfirma\",\"campaign_lead_id\":\"$CLID\"}")
+[ -z "$(neu_seit "$N0" "/functions/v1/n8n-embed")" ] \
+  && ok "Providerfehler -> kein Write" || ko "nach einem Providerfehler wurde geschrieben"
+buche "$(echo "$R" | jq -r '.result.isError')"
+
+# ── Die falsche id: der Write scheitert, und das darf nicht untergehen ──────
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" enrichCompany "{\"name\":\"Lead C\",\"campaign_lead_id\":\"$LEADID\"}")
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "true" ] \
+  && ok "fehlgeschlagener Write kommt als FEHLER an, nicht als stiller Erfolg" \
+  || ko "isError=$(echo "$R" | jq -r '.result.isError') — ein verlorener Write saehe wie ein Erfolg aus"
+[ "$(echo "$R" | text | jq -r '.enrichment_write.error')" = "lead_not_found" ] \
+  && ok "und der Grund steht dabei (lead_not_found bei einer leads.id)" \
+  || ko "Grund fehlt: $(echo "$R" | text | jq -c '.enrichment_write // "fehlt"')"
+[ "$(echo "$R" | text | jq -r '.company.industry')" = "Software" ] \
+  && ok "das Provider-Ergebnis geht dabei NICHT verloren" || ko "das Ergebnis ist mit dem Write-Fehler verschwunden"
 
 # ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
