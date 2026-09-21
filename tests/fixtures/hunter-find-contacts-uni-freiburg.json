@@ -1,0 +1,58 @@
+{
+  "found": true,
+  "key_source": "platform",
+  "provider": "hunter",
+  "domain": "uni-freiburg.de",
+  "organization": "Universität Freiburg",
+  "pattern": "{last}{f}",
+  "total_results": 297,
+  "emails": [
+    {
+      "email": "musterm@uni-freiburg.de",
+      "type": "personal",
+      "confidence": 99,
+      "first_name": "Mara",
+      "last_name": "Muster",
+      "position": "Chief Technology Advisor",
+      "seniority": null,
+      "department": "it",
+      "linkedin": "https://www.linkedin.com/in/mara-muster-1a02a4a7",
+      "phone": null,
+      "verification_status": null
+    },
+    {
+      "email": "beispielt@uni-freiburg.de",
+      "type": "personal",
+      "confidence": 98,
+      "first_name": "Tobias",
+      "last_name": "Beispiel",
+      "position": "Library IT Manager",
+      "seniority": "senior",
+      "department": "it",
+      "linkedin": "https://www.linkedin.com/in/tobias-beispiel-75754aba",
+      "phone": null,
+      "verification_status": "valid"
+    },
+    {
+      "email": "probstn@uni-freiburg.de",
+      "type": "personal",
+      "confidence": 98,
+      "first_name": "Nora",
+      "last_name": "Probst",
+      "position": "Director Of International Communications",
+      "seniority": "executive",
+      "department": "communication",
+      "linkedin": null,
+      "phone": null,
+      "verification_status": "valid"
+    }
+  ],
+  "credits": {
+    "credits_charged": 1,
+    "plan_remaining": 904,
+    "balance": 75,
+    "period": "2026-09"
+  },
+  "routed_to": "hunter",
+  "routing_reason": "Hunter is preferred for contact discovery"
+}
