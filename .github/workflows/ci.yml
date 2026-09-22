@@ -55,6 +55,8 @@ jobs:
           bash -n tests/pre-commit.sh
           bash -n tests/pipeline-tools.sh
           bash -n tests/oauth-transport.sh
+          bash -n tests/guard-merge.sh
+          bash -n .github/scripts/guard-merge.sh
           bash -n tests/demo-surface.sh
           bash -n tests/deno-lint.sh
           # ⚠️ .githooks/pre-commit steht mit, obwohl die Endung fehlt: git
@@ -79,6 +81,17 @@ jobs:
       # selbst mit, haengt also nicht daran, welchen Branch actions/checkout
       # gerade ausgecheckt hat (push-Event: Branch, pull_request: detached HEAD).
       - run: bash tests/guard-push.sh
+
+      # Selbsttest von .github/scripts/guard-merge.sh — dem Guard, der
+      # entscheidet, ob ein PR ohne menschlichen Blick gemergt werden darf.
+      # Gleiche Bauart wie guard-push und aus demselben Grund hier: nur jq, kein
+      # Netz, keine Instanz.
+      #
+      # ⚠️ Die Risikorichtung ist einseitig: ein KAPUTTER guard-merge ist
+      # fail-closed und macht PRs rot, das faellt sofort auf. Ein DURCHLAESSIGER
+      # faellt niemandem auf — und dann merged Auto-Merge Dinge durch, die ein
+      # Mensch haette sehen sollen.
+      - run: bash tests/guard-merge.sh
 
       # Selbsttest des Commit-Guards, aus denselben Gruenden wie der Schritt
       # darueber: kein HTTP, keine Instanz, kein Workers Build, und der unit-Job
