@@ -1354,6 +1354,18 @@ else
     || ko "generische: $(echo "$U" | jq -c '.enrichment_data.generische // "fehlt"')"
   [ -n "$(echo "$U" | jq -r '.enriched_at // ""')" ] && [ "$(echo "$U" | jq -r '.enrichment_provider')" = "hunter" ] \
     && ok "der Versuch ist datiert und dem Provider zugeordnet" || ko "Metadaten unvollstaendig: $U"
+  # ⚠️ ZWEI NAMEN, ZWEI BEDEUTUNGEN. Die ANZAHL heisst kandidaten_anzahl;
+  # 'kandidaten' ist dem Politik-Objekt aus n8n-embed vorbehalten (dort legt
+  # die Ueberschreib-Politik die zurueckgehaltenen Werte ab). Heute treffen
+  # sich beide nicht — wo kein Kontaktfeld geschrieben wird, haelt die Politik
+  # nichts zurueck —, aber ein Name fuer zwei Dinge ist die Verwechslung, die
+  # man erst bemerkt, wenn sie eingetreten ist.
+  [ "$(echo "$U" | jq -r '.enrichment_data.kandidaten_anzahl')" = "3" ] \
+    && ok "die Kandidatenzahl steht als kandidaten_anzahl (3)" \
+    || ko "kandidaten_anzahl: $(echo "$U" | jq -r '.enrichment_data.kandidaten_anzahl // "fehlt"')"
+  [ "$(echo "$U" | jq -r '.enrichment_data | has("kandidaten")')" = "false" ] \
+    && ok "und 'kandidaten' bleibt frei fuer das Politik-Objekt" \
+    || ko "enrichment_data traegt 'kandidaten': $(echo "$U" | jq -c '.enrichment_data.kandidaten')"
 fi
 S=$(echo "$R" | text | jq -c '.enrichment_write')
 [ "$(echo "$S" | jq -r '.persisted')" = "true" ] && [ "$(echo "$S" | jq -r '.contact')" = "false" ] \
