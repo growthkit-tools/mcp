@@ -1,0 +1,178 @@
+name: guard-merge
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Braucht dieser PR einen Menschen? Gruen = Auto-Merge darf greifen, rot =
+# Chris entscheidet. Rot ist KEIN Fehler (SPEC-guard-merge-auto-merge.md §1).
+#
+# Die Regeln stehen in .github/scripts/guard-merge.sh, nicht hier. Dieser
+# Workflow beschafft nur die Eingaben und reicht sie als JSON hinein: das
+# Skript ist ohne Netz und ohne GitHub lokal testbar (tests/guard-merge.sh),
+# der Workflow ist die Verdrahtung.
+#
+# VORLAGE: supabase `.github/workflows/guard-merge.yml` (#142/#143/#145). Eine
+# Abweichung: dieser Workflow holt ZUSAETZLICH die Commit-Messages, weil R2
+# hier auch dort nach dem Falsifikationsbeleg sucht (§18b dieses Repos legt
+# ihn in den Commit; Messung im Kopf des Skripts).
+#
+# ⚠️ DIESER WORKFLOW DEPLOYT NIE. Wie ci.yml (AGENTS.md Leitplanke 2).
+#
+# ⚠️ `guard-merge` wird erst dann Required Check, wenn er einmal auf einem PR
+# BERICHTET hat. Ein Required Check, der nie berichtet, verriegelt `main` fuer
+# alle — und der Ausweg waere der enforce_admins-Notausgang (AGENTS.md).
+#
+# ⚠️ AUF SEINEM EIGENEN PR LAEUFT ER NICHT. `pull_request_target` nimmt die
+# Definition aus `main`, und dort gibt es ihn noch nicht. Das ist erwartet und
+# kein Fehler: die Einfuehrung merged ein Mensch (R4), berichten tut der Guard
+# erst ab dem naechsten PR.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  # ⚠️ `pull_request_target`, NICHT `pull_request`. Bei `pull_request` nimmt
+  # GitHub die Workflow-DEFINITION aus dem PR-Branch: ein PR koennte diese Datei
+  # aendern (Trigger entfernen, Step streichen, Job umbenennen) und damit den
+  # Check umgehen, der ihn pruefen soll. R4 faenge das nicht — R4 steht im
+  # Skript, und das Skript wuerde gar nicht mehr aufgerufen.
+  #
+  # `pull_request_target` nimmt die Definition aus dem BASIS-Branch. Damit kommt
+  # BEIDES aus `main`: die Regeln (ueber den base.sha-Checkout, s.u.) und die
+  # Verdrahtung.
+  #
+  # ⚠️ WARUM DAS HIER SICHER IST. `pull_request_target` laeuft im privilegierten
+  # Kontext des Basis-Repos — mit Schreibrechten und Secrets. Die bekannte Falle
+  # ist, in diesem Kontext den PR-CODE auszuchecken und auszufuehren: das ist
+  # Remote Code Execution mit dem Repo-Token, fuer jeden, der einen PR oeffnen
+  # darf. Dieser Workflow tut das ausdruecklich NICHT:
+  #   * der Checkout steht auf `base.sha` — kein Byte aus dem PR;
+  #   * ausgefuehrt wird nur `.github/scripts/guard-merge.sh` aus der Basis;
+  #   * PR-Daten (Dateiliste, Body, Commit-Messages) sind DATEN, nie Code: der
+  #     Body geht ueber `env`, nicht per ${{ }} in eine run-Zeile, und die
+  #     Commit-Messages kommen als JSON-Strings aus der API;
+  #   * `permissions` bleibt auf read/read.
+  #
+  # ⚠️ Wer hier jemals `ref: ${{ github.event.pull_request.head.sha }}` oder
+  # `ref: refs/pull/.../merge` eintraegt, macht aus diesem Workflow eine
+  # RCE-Luecke. Deshalb steht die Regel zusaetzlich als Assertion:
+  # tests/source-invariants.sh, Abschnitt "pull_request_target nur mit
+  # base.sha-Checkout".
+  pull_request_target:
+    # `edited` ist tragend: R1' und R2 lesen die PR-BESCHREIBUNG. Ohne diesen
+    # Typ bliebe ein PR rot, nachdem der Beleg nachgetragen wurde.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard-merge:
+    # Der Job-Name IST der Check-Name. Er muss `guard-merge` bleiben — die
+    # Branch Protection referenziert ihn als Zeichenkette, und ein umbenannter
+    # Job erscheint dort als Check, der nie berichtet.
+    name: guard-merge
+    runs-on: ubuntu-latest
+    steps:
+      # ⚠️ DER GUARD KOMMT AUS DER BASIS, NICHT AUS DEM PR. Mit `base.sha`
+      # urteilt immer der Stand, der auf `main` gemergt ist. Der Preis ist
+      # gewollt: eine Aenderung am Guard wirkt erst NACH ihrem Merge, und
+      # diesen Merge macht ein Mensch (R4).
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Dateiliste holen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          # Gegenprobe aus einer UNABHAENGIGEN Quelle (Event-Payload statt API).
+          ERWARTET: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # ⚠️ FAIL-CLOSED. Ein fehlgeschlagener Abruf liefert eine leere Liste,
+          # und eine leere Liste besteht JEDE Regel lautlos (AGENTS.md §18a a).
+          if ! FILES=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename'); then
+            echo "::error::Dateiliste konnte nicht abgerufen werden — guard-merge urteilt nicht auf Verdacht (fail-closed)."
+            exit 1
+          fi
+
+          N=$(printf '%s\n' "$FILES" | grep -c . || true)
+          echo "── Dateien: abgerufen $N · PR meldet ${ERWARTET:-<unbekannt>}"
+
+          if [ "$N" -eq 0 ]; then
+            echo "::error::Leere Dateiliste. Entweder hat der PR keine Aenderungen, oder der Abruf lief ins Leere — von hier aus nicht unterscheidbar, also rot."
+            exit 1
+          fi
+          # Die Relation, nicht die Zahl: laufen API und Payload auseinander,
+          # hat die Paginierung abgeschnitten, und die Regeln saehen nur einen
+          # Teil des PR.
+          if [ -n "${ERWARTET:-}" ] && [ "$N" -ne "$ERWARTET" ]; then
+            echo "::error::Abgerufen $N Dateien, der PR meldet $ERWARTET — unvollstaendige Liste. Rot (fail-closed)."
+            exit 1
+          fi
+
+          printf '%s\n' "$FILES" > /tmp/guard-merge-files.txt
+
+      - name: Commit-Messages holen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ERWARTET: ${{ github.event.pull_request.commits }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # Eine Nachricht je Zeile, als JSON-String kodiert (`@json`): so
+          # ueberstehen Zeilenumbrueche IN einer Nachricht den Transport, und
+          # der Text ist ein Wert, kein Code.
+          if ! COMMITS=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].commit.message | @json'); then
+            echo "::error::Commit-Messages konnten nicht abgerufen werden — R2 laese sonst nur den Body (fail-closed)."
+            exit 1
+          fi
+
+          NC=$(printf '%s\n' "$COMMITS" | grep -c . || true)
+          echo "── Commits: abgerufen $NC · PR meldet ${ERWARTET:-<unbekannt>}"
+
+          # ⚠️ Die Commits-API liefert hoechstens 250 Eintraege. Ein laengerer PR
+          # waere abgeschnitten — und ausgerechnet der Commit mit dem Beleg
+          # koennte fehlen. Deshalb dieselbe Gegenprobe wie bei den Dateien.
+          if [ "$NC" -eq 0 ] || { [ -n "${ERWARTET:-}" ] && [ "$NC" -ne "$ERWARTET" ]; }; then
+            echo "::error::Abgerufen $NC Commits, der PR meldet ${ERWARTET:-?} — unvollstaendig oder leer. Rot (fail-closed)."
+            exit 1
+          fi
+
+          printf '%s\n' "$COMMITS" | jq -s . > /tmp/guard-merge-commits.json
+
+      - name: Guard fahren
+        env:
+          # ⚠️ DER BODY GEHT UEBER env, NICHT ueber ${{ }} in der run-Zeile.
+          # Direkt interpoliert waere der PR-Body ausfuehrbarer Shell-Code.
+          BODY: ${{ github.event.pull_request.body }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          GUARD=.github/scripts/guard-merge.sh
+          # Der Guard stammt aus base.sha. Fehlt er dort, ist das kein Grund
+          # durchzuwinken: bei seinem EIGENEN ersten PR existiert er auf `main`
+          # noch nicht, und genau dann muss ein Mensch hinsehen.
+          if [ ! -f "$GUARD" ]; then
+            echo "::error::$GUARD existiert im Basis-Stand nicht — der Guard urteilt nur aus dem Stand von main. Dieser PR geht an einen Menschen."
+            exit 1
+          fi
+
+          jq -Rn --arg body "$BODY" --slurpfile c /tmp/guard-merge-commits.json \
+            '{files: [inputs], body: $body, commits: $c[0]}' < /tmp/guard-merge-files.txt \
+            > /tmp/guard-merge-event.json
+
+          # Kein `set -e` hier: der Exit-Code des Guards IST das Ergebnis.
+          OUT=$(bash "$GUARD" < /tmp/guard-merge-event.json 2>&1); RC=$?
+          printf '%s\n' "$OUT"
+
+          case "$RC" in
+            0) echo "✅ guard-merge gruen — Auto-Merge darf greifen." ;;
+            1) echo "::error::guard-merge rot — dieser PR braucht einen Menschen. Rot heisst NICHT 'verboten': Chris kann ihn als Admin mergen. Nicht umschreiben, nur um die Regel zu treffen." ; exit 1 ;;
+            *) echo "::error::guard-merge konnte nicht urteilen (Exit $RC) — fail-closed, also rot." ; exit 1 ;;
+          esac
