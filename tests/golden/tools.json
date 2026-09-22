@@ -444,6 +444,16 @@
   },
   {
     "meta": null,
+    "name": "getCampaignLead",
+    "props": [
+      "campaign_lead_id"
+    ],
+    "required": [
+      "campaign_lead_id"
+    ]
+  },
+  {
+    "meta": null,
     "name": "getCampaignLeadFields",
     "props": [
       "campaign_id"

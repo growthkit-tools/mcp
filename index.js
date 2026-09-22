@@ -67,7 +67,7 @@ const READ_ONLY_TOOLS = new Set([
   "crmGetPipelines", "crmGetDeal", "crmCheckConnection",
   "enrichCompany", "enrichPerson", "findContacts", "findEmail", "verifyEmail", "discoverSimilar",
   "getTopLeads", "listCampaigns", "getCampaign", "getCampaignLeadFields", "listCampaignLeads",
-  "show_callable_leads",
+  "getCampaignLead", "show_callable_leads",
   // pipelineStatus/listLeadSignals lesen nur. pipelineRun NICHT — er schreibt und
   // verbraucht Credits, in `reveal` (3/Lead, 13 mit Telefon) UND in `resolve`
   // (1/Lead, enrich_company). Die frueher hier stehende Kurzform "nur reveal"
@@ -2827,7 +2827,7 @@ export default {
         {
           name: "listCampaignLeads",
           title: "Campaign: List Leads",
-          description: "List leads in a campaign, optionally filtered by lifecycle_stage or enrichment_status. Returns up to 100 per call. Compact rows by default \u2014 id, company name, domain, score, fit_gate, strong_signals, has_email, has_phone, lifecycle_stage \u2014 which is what you need to rank and to decide. For one lead's complete record use getCampaignLeadFields, or pass fields=full." + GATE_SATZ,
+          description: "List leads in a campaign, optionally filtered by lifecycle_stage or enrichment_status. Returns up to 100 per call. Compact rows by default \u2014 id, company name, domain, score, fit_gate, strong_signals, has_email, has_phone, lifecycle_stage \u2014 which is what you need to rank and to decide. The compact rows carry no contact. fields=full adds the contact (contact_name, contact_role, contact_email, contact_phone), enrichment_provider, enriched_at and enrichment_persona: why the enrichment picked this contact \u2014 persona_naehe (closeness of the contact's role to the campaign persona, 0 to 1), persona_treffer, gewaehlt, the alternativen it passed over, and getauscht when it replaced a contact who was already there; that previous contact is kept in metadata.vorheriger_kontakt. enrichment_persona is null when the lead was never enriched with a persona. For one lead's complete record \u2014 including kandidaten_liste, everyone the enrichment found \u2014 call getCampaignLead with the row's id." + GATE_SATZ,
           inputSchema: {
             type: "object",
             required: ["campaign_id"],
@@ -2840,7 +2840,19 @@ export default {
               // baut den Payload aus einer Whitelist, und die Allowlist aus #38
               // verwirft davor jeden Schluessel, der nicht im Schema steht —
               // dieselbe Klasse wie `country`/`industry` und `lang` in #41.
-              fields: { type: "string", enum: ["compact", "full"], description: "compact for lists and ranking; full only when the user asks for a specific lead's details. Default compact." },
+              fields: { type: "string", enum: ["compact", "full"], description: "compact for lists and ranking; full when you need contacts or the enrichment trail across the list. For a single lead prefer getCampaignLead. Default compact." },
+            },
+          },
+        },
+        {
+          name: "getCampaignLead",
+          title: "Campaign: Get Lead",
+          description: "One campaign lead with everything stored about it: contact, company, score, lifecycle_stage, metadata and the complete enrichment_data. That is where you answer why a contact was chosen and who else was found: enrichment_data.persona holds the trail (persona_naehe, persona_treffer, gewaehlt, alternativen, getauscht), enrichment_data.kandidaten_liste the people the enrichment found, and metadata.vorheriger_kontakt the contact this one replaced. Read-only, spends no credits. \u26a0 campaign_lead_id is the `id` of a row from listCampaignLeads (campaign_leads.id). It is NOT the `lead_id` from pipelineStatus' top_10 or listLeadSignals: that one names the company row and answers lead_not_found \u2014 exactly as a lead from another workspace does.",
+          inputSchema: {
+            type: "object",
+            required: ["campaign_lead_id"],
+            properties: {
+              campaign_lead_id: { type: "string", description: "The `id` of a row from listCampaignLeads (campaign_leads.id)." },
             },
           },
         },
@@ -3292,6 +3304,7 @@ export default {
           getCampaignLeadFields: ["admin", "team", "view"],
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
+          getCampaignLead:       ["admin", "team", "view"],
           // Qualifizierungskette: Status und Signale sind Reads, der Lauf ist ein
           // Write mit Credit-Verbrauch \u2014 deshalb kein "view".
           pipelineStatus:        ["admin", "team", "view"],
@@ -3468,6 +3481,7 @@ export default {
           getCampaignLeadFields: ["admin", "team", "view"],
           updateCampaignLead:    ["admin", "team"],
           listCampaignLeads:     ["admin", "team", "view"],
+          getCampaignLead:       ["admin", "team", "view"],
           // Spiegel der Karte oben; in Sync halten.
           pipelineStatus:        ["admin", "team", "view"],
           listLeadSignals:       ["admin", "team", "view"],
@@ -4342,6 +4356,7 @@ if (name === "getChapterOverview") {
           getCampaign:           { url: EDGE_EMBED_URL, action: "get_campaign" },
           updateCampaign:        { url: EDGE_EMBED_URL, action: "update_campaign" },
           listCampaignLeads:     { url: EDGE_EMBED_URL, action: "list_campaign_leads" },
+          getCampaignLead:       { url: EDGE_EMBED_URL, action: "get_campaign_lead" },
           listLeadSignals:       { url: EDGE_EMBED_URL, action: "list_lead_signals" },
           updateLeadSignal:      { url: EDGE_EMBED_URL, action: "update_lead_signal" },
           deleteLeadSignal:      { url: EDGE_EMBED_URL, action: "delete_lead_signal" },
@@ -4486,6 +4501,13 @@ if (name === "getChapterOverview") {
           // zweiter Default an dieser Stelle waere die naechste Stelle, die
           // driftet.
           if (args.fields) payload.fields = args.fields;
+        } else if (name === "getCampaignLead") {
+          // Das Tool sagt campaign_lead_id, das Backend lead_id — gemeint ist
+          // beide Male campaign_leads.id. Der Name im Tool ist der aus
+          // ZIEL_LEAD_BESCHREIBUNG: `lead_id` heisst im Katalog sonst leads.id
+          // (pipelineStatus top_10, listLeadSignals), und genau diese
+          // Verwechslung endet in lead_not_found.
+          payload.lead_id = args.campaign_lead_id;
         } else if (name === "getCampaignLeadFields") {
           payload.campaign_id = args.campaign_id;
         } else if (name === "listLeadSignals") {
