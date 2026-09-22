@@ -324,12 +324,45 @@ const LEADS_FULL = {
   leads: [{
     id: "00000000-0000-4000-8000-0000000000a1",
     call_count: 0, last_call_at: null, last_call_status: null,
-    lifecycle_stage: "enriched", score: 55, completeness: 0.36, metadata: {},
+    lifecycle_stage: "enriched", score: 55, completeness: 0.36,
+    // v192: der Vorgaenger-Kontakt steht in der MITGLIEDSCHAFT (metadata), nicht
+    // im Trail — so schreibt ihn campaign-pipeline beim Tausch.
+    metadata: { persona_match: true, vorheriger_kontakt: { name: "B. Vorher", role: "CFO", email: "b@lead-a.invalid", naehe: 0.31 } },
     created_at: "2026-08-01T00:00:00Z",
     company_name: "Lead A", company_domain: "lead-a.invalid", company_industry: "Software",
     contact_name: "A. Muster", contact_email: "a@lead-a.invalid", contact_role: "CEO",
     contact_phone: null, phone_status: null, phone_source: null, enrichment_status: "enriched",
+    // v192 (supabase #155): die Liste traegt NUR den Trail, unter eigenem Namen
+    // — `enrichment_persona`, nicht `enrichment_data`. Feldnamen woertlich vom
+    // Schreibort (campaign-pipeline, Spec §2c), Werte ausgedacht.
+    enrichment_provider: "hunter", enriched_at: "2026-09-22T10:00:00Z",
+    enrichment_persona: {
+      persona_naehe: 0.72, persona_match: true, persona_treffer: "rolle",
+      gewaehlt: { name: "A. Muster", rolle: "CEO", naehe: 0.72 },
+      alternativen: [{ name: "C. Anders", rolle: "Head of Sales", naehe: 0.64 }],
+      getauscht: true, bestehende_rolle_naehe: 0.31,
+    },
   }],
+};
+
+// get_campaign_lead (v192): EIN Lead, mit der VOLLEN enrichment_data — also
+// auch `kandidaten_liste`, die die Liste bewusst nicht mitliefert.
+const EIN_LEAD = {
+  success: true,
+  lead: {
+    ...LEADS_FULL.leads[0],
+    enrichment_persona: undefined,
+    enrichment_data: {
+      method: "find_contacts", retrieved_at: "2026-09-22T10:00:00Z",
+      persona: LEADS_FULL.leads[0].enrichment_persona,
+      raw: { routed_to: "hunter", kandidaten: 3, quelle: "find_contacts" },
+      kandidaten_liste: [
+        { name: "A. Muster", rolle: "CEO", email: "a@lead-a.invalid" },
+        { name: "C. Anders", rolle: "Head of Sales", email: "c@lead-a.invalid" },
+        { name: "D. Dritte", rolle: "CTO", email: "d@lead-a.invalid" },
+      ],
+    },
+  },
 };
 
 createServer((req, res) => {
@@ -432,6 +465,13 @@ createServer((req, res) => {
           expires_at_neu_berechnet: neu,
           ignored_fields: ignored,
         });
+      }
+      if (body.action === "get_campaign_lead") {
+        // Fremder und unbekannter Lead sind im Backend derselbe Fall: 404.
+        if (body.lead_id !== "00000000-0000-4000-8000-0000000000a1") {
+          return sende(404, { error: "lead_not_found" });
+        }
+        return sende(200, EIN_LEAD);
       }
       if (body.action === "update_campaign_lead") {
         // Der Fall, den der Auftrag ausdruecklich nennt: aufgeloest wird ueber
@@ -1507,6 +1547,73 @@ Z1=$(echo "$R" | jq -c '.result.structuredContent.leads[1] // {}')
 [ "$(echo "$Z1" | jq -r '.score')" != "0" ] \
   && ok "und eben NICHT score 0 — das waere eine Aussage, die niemand gemessen hat" \
   || ko "die ungescorte Zeile zeigt score 0"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "N · Lesepfad fuer Enrichment (n8n-embed v192)"
+
+# ANLASS drueben: der Beweis-Trail wurde geschrieben und war ohne SQL fuer
+# niemanden lesbar. v192 liefert ihn in `list_campaign_leads` full (als
+# `enrichment_persona`) und in der neuen Action `get_campaign_lead` (die volle
+# `enrichment_data`). Hier wird die ADAPTER-Seite geprueft: Name, Nutzlast,
+# Durchreichen ohne Umbau, Fehler als Fehler.
+
+# ── getCampaignLead ─────────────────────────────────────────────────────────
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" getCampaignLead '{"campaign_lead_id":"00000000-0000-4000-8000-0000000000a1"}')
+E=$(neu_seit "$N0" "/functions/v1/n8n-embed")
+if [ -z "$E" ]; then
+  ko "getCampaignLead ruft n8n-embed nicht"
+else
+  [ "$(echo "$E" | jq -r '.body.action')" = "get_campaign_lead" ] \
+    && ok "getCampaignLead -> action=get_campaign_lead" || ko "falsche action: $(echo "$E" | jq -r '.body.action')"
+  # ⚠️ DER PARAMETER HEISST campaign_lead_id, das Backend erwartet lead_id —
+  # beides meint campaign_leads.id. Der Adapter bildet ab; ohne das kaeme ein
+  # "lead_id (valid UUID) is required" zurueck.
+  [ "$(echo "$E" | jq -r '.body.lead_id')" = "00000000-0000-4000-8000-0000000000a1" ] \
+    && ok "campaign_lead_id kommt als lead_id beim Backend an" || ko "lead_id fehlt: $(echo "$E" | jq -c '.body')"
+  [ "$(echo "$E" | jq -r '.body | has("campaign_lead_id")')" = "false" ] \
+    && ok "und nicht zusaetzlich unter dem Tool-Namen" || ko "campaign_lead_id wird zusaetzlich mitgeschickt"
+fi
+S=$(echo "$R" | text)
+[ "$(echo "$S" | jq -r '.lead.enrichment_data.kandidaten_liste | length')" = "3" ] \
+  && ok "die volle enrichment_data kommt durch, inklusive kandidaten_liste (3)" \
+  || ko "enrichment_data umgeformt oder verkuerzt: $(echo "$S" | jq -c '.lead.enrichment_data // "fehlt"' | head -c 120)"
+[ "$(echo "$S" | jq -r '.lead.enrichment_data.persona.alternativen[0].name')" = "C. Anders" ] \
+  && ok "der Trail kommt mit: alternativen, also wen das System NICHT genommen hat" \
+  || ko "persona.alternativen fehlt"
+R=$(ruf "$TOK_TEAM" getCampaignLead '{"campaign_lead_id":"00000000-0000-4000-8000-000000000011"}')
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "true" ] && [ "$(echo "$R" | text | jq -r '.error')" = "lead_not_found" ] \
+  && ok "leads.id statt campaign_leads.id: 404 lead_not_found als FEHLER" \
+  || ko "404: isError=$(echo "$R" | jq -r '.result.isError') $(echo "$R" | text | head -c 80)"
+
+# ── listCampaignLeads full: der Trail kommt unveraendert durch ──────────────
+R=$(ruf "$TOK_TEAM" listCampaignLeads '{"campaign_id":"38fee505-00db-45ca-8f0a-101dcf5b12ab","fields":"full"}')
+Z=$(echo "$R" | text | jq -c '.leads[0]')
+[ "$(echo "$Z" | jq -r '.enrichment_persona.persona_naehe')" = "0.72" ] && [ "$(echo "$Z" | jq -r '.enrichment_provider')" = "hunter" ] \
+  && ok "full: enrichment_persona und enrichment_provider kommen unveraendert an" \
+  || ko "full: Trail fehlt oder umgeformt: $(echo "$Z" | jq -c '{enrichment_provider, enrichment_persona}' | head -c 120)"
+[ "$(echo "$Z" | jq -r '.metadata.vorheriger_kontakt.name')" = "B. Vorher" ] \
+  && ok "full: metadata.vorheriger_kontakt kommt mit" || ko "vorheriger_kontakt fehlt"
+
+# ── Katalog ─────────────────────────────────────────────────────────────────
+LV=$(mcp "$TOK_VIEW" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+echo "$LV" | jq -r '.result.tools[].name' | grep -qx getCampaignLead \
+  && ok "view sieht getCampaignLead (ein Lesezugriff)" || ko "view sieht getCampaignLead nicht"
+[ "$(echo "$LV" | jq -r '.result.tools[] | select(.name == "getCampaignLead") | .annotations.readOnlyHint')" = "true" ] \
+  && ok "getCampaignLead: readOnlyHint=true" || ko "getCampaignLead nicht als lesend markiert"
+# Die Liste muss auf das neue Tool zeigen — vorher zeigte sie fuer "one lead's
+# complete record" auf getCampaignLeadFields, das die Felder einer KAMPAGNE
+# entdeckt und gar keinen Lead liefert.
+D=$(echo "$LV" | jq -r '.result.tools[] | select(.name == "listCampaignLeads") | .description')
+case "$D" in
+  *getCampaignLead[!F]*|*getCampaignLead) ok "listCampaignLeads verweist fuer den Einzel-Lead auf getCampaignLead" ;;
+  *) ko "listCampaignLeads verweist nicht auf getCampaignLead" ;;
+esac
+case "$D" in
+  *enrichment_persona*) ok "listCampaignLeads nennt enrichment_persona (full)" ;;
+  *) ko "listCampaignLeads nennt den Trail nicht" ;;
+esac
 
 # ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
