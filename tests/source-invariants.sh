@@ -298,6 +298,64 @@ else
   ko "Kein ?id=eq.-Filter fuer:$SQ_FEHLT — entweder ist der Ersetzungsweg weg, oder der Grep misst nicht, was er soll (§17a)"
 fi
 
+# --- pull_request_target nur mit base.sha-Checkout ---------------------------
+# DIE GEFAHR, und sie ist die bekannteste in GitHub Actions.
+# `pull_request_target` laeuft im privilegierten Kontext des BASIS-Repos — mit
+# Schreibrechten und Secrets. Das ist fuer guard-merge gewollt: nur so kommt die
+# Workflow-DEFINITION aus `main` und kann von keinem PR umgangen werden. Der
+# Preis: wer in diesem Kontext den PR-CODE auscheckt und ausfuehrt, hat Remote
+# Code Execution mit dem Repo-Token — fuer jeden, der einen PR oeffnen darf.
+# Ein `ref: …head.sha` an der falschen Stelle genuegt.
+#
+# ⚠️ WARUM ALS ASSERTION UND NICHT NUR ALS KOMMENTAR. Die gefaehrliche Richtung
+# ist STILL: ein auf head.sha umgestellter Checkout macht nichts rot, er laeuft
+# einfach durch. Und dieses Repo ist OEFFENTLICH — jeder kann einen PR oeffnen.
+#
+# Vorlage: supabase tests/source-invariants.sh, Abschnitt N. Kommentarzeilen
+# fallen raus, damit der Warntext in guard-merge.yml (der `head.sha` woertlich
+# nennt) keinen Fehlalarm ausloest.
+PRT_DIR="$REPO_ROOT/.github/workflows"
+prt_yaml(){ grep -vE '^[[:space:]]*#' "$1"; }
+
+PRT_FILES=$(ls "$PRT_DIR"/*.yml 2>/dev/null || true)
+PRT_ANZ=$(printf '%s\n' "$PRT_FILES" | grep -c . || true)
+if [ "${PRT_ANZ:-0}" -eq 0 ]; then
+  ko "pull_request_target: keine Workflow-Datei unter $PRT_DIR gefunden — die Pruefung liefe leer-wahr durch (§18a a)"
+else
+  # KALIBRIERUNG (§17a), beide Richtungen, VOR der Pruefung: ohne einen vorher
+  # benannten Treffer ist "keine unsichere Datei" nicht von "Muster trifft
+  # nichts" zu unterscheiden — und Letzteres saehe wie Erfolg aus.
+  PRT_KAL_JA=$(prt_yaml "$PRT_DIR/guard-merge.yml" 2>/dev/null | grep -cE '^[[:space:]]*pull_request_target:' || true)
+  PRT_KAL_NEIN=$(prt_yaml "$PRT_DIR/ci.yml" 2>/dev/null | grep -cE '^[[:space:]]*pull_request_target:' || true)
+  if [ "${PRT_KAL_JA:-0}" -eq 0 ]; then
+    ko "pull_request_target: Kalibrierung fehlgeschlagen — guard-merge.yml wird nicht als pull_request_target erkannt (fehlt sie, oder misst das Muster nichts? §17a)"
+  elif [ "${PRT_KAL_NEIN:-0}" -gt 0 ]; then
+    ko "pull_request_target: Kalibrierung fehlgeschlagen — ci.yml wird faelschlich erkannt, das Muster ist zu breit (§18a d)"
+  else
+    PRT_BETROFFEN=""; PRT_UNSICHER=""
+    for f in $PRT_FILES; do
+      HAT=$(prt_yaml "$f" | grep -cE '^[[:space:]]*pull_request_target:' || true)
+      [ "${HAT:-0}" -gt 0 ] || continue
+      PRT_BETROFFEN="$PRT_BETROFFEN $(basename "$f")"
+      # Zwei Bedingungen, beide muessen halten: ein base.sha-ref MUSS da sein,
+      # und ein head.sha-/merge-ref darf NICHT da sein. Eine Datei koennte
+      # beide tragen.
+      REF_OK=$(prt_yaml "$f" | grep -cE '^[[:space:]]*ref:.*base\.sha' || true)
+      REF_BOESE=$(prt_yaml "$f" | grep -cE '^[[:space:]]*ref:.*(head\.sha|refs/pull)' || true)
+      if [ "${REF_OK:-0}" -eq 0 ] || [ "${REF_BOESE:-0}" -gt 0 ]; then
+        PRT_UNSICHER="$PRT_UNSICHER $(basename "$f")"
+      fi
+    done
+    if [ -z "$PRT_BETROFFEN" ]; then
+      ko "pull_request_target: kein Workflow gefunden, obwohl die Kalibrierung einen kennt — die Schleife misst etwas anderes"
+    elif [ -n "$PRT_UNSICHER" ]; then
+      ko "pull_request_target OHNE base.sha-Checkout (oder mit head.sha/merge-ref):$PRT_UNSICHER — im privilegierten Kontext waere das RCE mit dem Repo-Token"
+    else
+      ok "pull_request_target: alle betroffenen Workflows checken base.sha aus ($(printf '%s' "$PRT_BETROFFEN" | wc -w | tr -d ' ') geprueft)"
+    fi
+  fi
+fi
+
 # --- Repo-Hygiene · Exec-Bit, Ignore-Regeln, keine getrackten Secrets ---------
 # Zwei Fehlerklassen, die bisher nur auffielen, weil Chris beim Push-Stopp auf den
 # Commit-Stack gesehen hat: ein Testskript ohne Exec-Bit (#3) und ein ungeignortes
