@@ -237,16 +237,22 @@ CI:              .github/workflows/ci.yml — testet und probt NUR, deployt nie
 **Kein Docker im Code-Server verfügbar** und nichts hier braucht welches. Wenn du auf ein
 Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
 
-### Push, der `.github/workflows/**` anfasst, braucht einen Umweg
+### Push, der `.github/workflows/**` anfasst
 
-**Für dieses Repo am 24.08. nachgesehen, nicht übernommen:** das Remote ist inzwischen
-**HTTPS** (früher SSH), `~/.gitconfig` bindet `gh auth git-credential` an
-`https://github.com`, und der `gh`-Token trägt `admin:public_key, gist, read:org, repo` —
-**kein `workflow`**. Ein blanker `git push` greift immer zuerst auf ihn zu und scheitert,
-sobald der Commit eine Workflow-Datei anfasst.
+**Seit dem 22.09.2026 braucht er keinen Umweg mehr — ein blanker `git push` trägt.**
+Der aktive `gh`-Account ist `growthkit-cc`, sein Token trägt
+`read:org, repo, workflow`; `~/.gitconfig` bindet `gh auth git-credential` an
+`https://github.com`, das Remote ist HTTPS. Belegt an PR #56: zwei Workflow-Dateien
+(`guard-merge.yml`, `ci.yml`), gepusht ohne jedes `-c`. Bis dahin stand hier, der Token
+trage **kein** `workflow` — das galt für den Account vom 24.08. und ist mit dem
+Account-Wechsel überholt, nicht vorher falsch gewesen.
 
-Es braucht das fine-grained PAT **und** einen Reset der Helper-Liste — aber auf **der
-Ebene, auf der sie eingetragen ist**:
+⚠️ **Die Scopes hängen am Account, nicht am Repo — vor dem Push nachsehen, nicht aus
+dieser Zeile zitieren:** `gh auth status` zeigt aktiven Account und `Token scopes`.
+Fehlt dort `workflow`, gilt der Rest dieses Abschnitts wieder.
+
+**Nur dann** braucht es das fine-grained PAT **und** einen Reset der Helper-Liste — aber
+auf **der Ebene, auf der sie eingetragen ist**:
 
 ```bash
 git -c credential.helper= \
