@@ -629,6 +629,7 @@
       "confirm_credits",
       "dry_run",
       "lang",
+      "lead_ids",
       "limit",
       "min_score",
       "require_signal",
