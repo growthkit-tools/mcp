@@ -1616,6 +1616,81 @@ case "$D" in
 esac
 
 # ═════════════════════════════════════════════════════════════════════════════
+sec "O · lead_ids — der gezielte Lauf auf benannte Leads"
+
+# campaign-pipeline liest `body.lead_ids` seit dem 23.09.2026 (supabase
+# fc84890): die Kandidatenmenge wird auf die genannten Leads zugeschnitten, und
+# bei `resolve` uebersteuert die Nennung zusaetzlich die beiden Wiederhol-
+# fristen. Auf MCP-Seite ist die Schema-Property die EINZIGE Stelle: der
+# Dispatch spreadet `...args`, und die Allowlist aus #38 verwirft davor jeden
+# Schluessel, der nicht in `inputSchema.properties` steht — dieselbe Klasse wie
+# `lang` in #41 und `fields` in #47.
+
+IDS='["00000000-0000-4000-8000-000000000011","00000000-0000-4000-8000-000000000012"]'
+# ⚠️ `lead_id` (Einzahl) FAEHRT ABSICHTLICH MIT. Ohne diesen zweiten Schluessel
+# belegt der Fall darunter nicht, was er zu belegen scheint: waere die Allowlist
+# ganz abgeschaltet, kaeme `lead_ids` auch ohne Schema-Zeile an, und die
+# Assertion waere gruen (§18a d). Der undeklarierte Nachbar trennt die beiden
+# Welten — er darf NICHT ankommen, waehrend der deklarierte ankommt.
+ruf "$TOK_TEAM" pipelineRun "{\"campaign_id\":\"7ed61251-14c1-4017-976b-dece91f96ea3\",\"stage\":\"resolve\",\"dry_run\":true,\"lead_ids\":$IDS,\"lead_id\":\"00000000-0000-4000-8000-000000000011\"}" >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+if [ -z "$P" ]; then
+  ko "campaign-pipeline wurde nicht gerufen — der lead_ids-Fall hat nichts gemessen (§18a a)"
+else
+  [ "$(echo "$P" | jq -r '.body.lead_ids | type')" = "array" ] \
+    && ok "lead_ids kommt als ARRAY an (nicht als String, nicht verschluckt)" \
+    || ko "lead_ids fehlt oder ist kein Array: $(echo "$P" | jq -c '.body.lead_ids // "fehlt"')"
+  [ "$(echo "$P" | jq -cS '.body.lead_ids')" = "$(echo "$IDS" | jq -cS '.')" ] \
+    && ok "beide UUIDs kommen unveraendert und in derselben Reihenfolge an" \
+    || ko "lead_ids verfaelscht: $(echo "$P" | jq -c '.body.lead_ids')"
+  [ "$(echo "$P" | jq -r '.body | has("lead_id")')" = "false" ] \
+    && ok "GEGENRICHTUNG: das undeklarierte 'lead_id' wird weiterhin verworfen — die Allowlist ist an" \
+    || ko "'lead_id' ist durchgekommen; der Fall darueber belegt dann nicht die Schema-Zeile"
+fi
+
+# Die leere Liste ist KEIN Sonderfall im Adapter. Das Backend liest sie als
+# „keine Einschraenkung" (`Array.isArray(...) && length > 0`); wer sie hier
+# wegwirft oder zu null macht, verschiebt diese Entscheidung an die falsche
+# Stelle.
+ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"resolve","dry_run":true,"lead_ids":[]}' >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+[ "$(echo "$P" | jq -r '.body.lead_ids | type')" = "array" ] && [ "$(echo "$P" | jq -r '.body.lead_ids | length')" = "0" ] \
+  && ok "die leere Liste kommt als leeres Array an, unveraendert" \
+  || ko "leere lead_ids umgeformt: $(echo "$P" | jq -c '.body.lead_ids // "fehlt"')"
+
+# GEGENPROBE, muss gruen bleiben: ohne lead_ids darf der Schluessel NICHT
+# auftauchen. Ein Adapter, der eine leere Liste als Default setzt, machte aus
+# „alle Kandidaten" ein „keine" — und zwar still.
+ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"resolve","dry_run":true}' >/dev/null
+P=$(letzte "/functions/v1/campaign-pipeline")
+[ "$(echo "$P" | jq -r '.body | has("lead_ids")')" = "false" ] \
+  && ok "ohne Nennung steht kein lead_ids im Body (kein erfundener Default)" \
+  || ko "der Adapter setzt lead_ids von sich aus: $(echo "$P" | jq -c '.body.lead_ids')"
+
+# Katalog: Typ und Elementtyp stehen NICHT im Golden Master (der erfasst nur die
+# Property-KEYS). Ein `type: "string"` statt `"array"` faellt dort also nicht
+# auf — hier schon.
+LT=$(mcp "$TOK_TEAM" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+PROP=$(echo "$LT" | jq -c '.result.tools[] | select(.name == "pipelineRun") | .inputSchema.properties.lead_ids')
+[ "$(echo "$PROP" | jq -r '.type')" = "array" ] && [ "$(echo "$PROP" | jq -r '.items.type')" = "string" ] \
+  && ok "pipelineRun.lead_ids ist array of string" || ko "falscher Typ: $PROP"
+# ⚠️ DIE ID-SORTE IST DER EIGENTLICHE INHALT DIESER BESCHREIBUNG. campaign-
+# pipeline filtert `nurDiese` gegen `z.lead_id` der View campaign_lead_priority
+# — das ist `leads.id`, NICHT die `id` aus listCampaignLeads (campaign_leads.id,
+# in der View `campaign_lead_id`). Wer die Mitgliedschafts-UUID schickt, bekommt
+# keinen Fehler, sondern null Kandidaten — nicht unterscheidbar von „nichts zu
+# tun". Deshalb steht die Sorte in der Beschreibung, und deshalb steht sie hier.
+# ⚠️ DIE RUECKWAERTS-ANFUEHRUNG IST NICHT KOSMETIK. Ein Muster auf `leads.id`
+# ohne sie trifft auch `campaign_leads.id` — also ausgerechnet die FALSCHE
+# Sorte, die derselbe Satz als Gegenbeispiel nennt. So gebaut war die Assertion
+# gruen, nachdem die richtige Sorte aus der Beschreibung entfernt worden war
+# (§18a d: die Prueferin sah nur, DASS etwas dasteht).
+case "$(echo "$PROP" | jq -r '.description')" in
+  *'`leads.id`'*) ok "die Beschreibung nennt die ID-Sorte als \`leads.id\`" ;;
+  *) ko "die Beschreibung nennt \`leads.id\` nicht: $(echo "$PROP" | jq -r '.description' | head -c 120)" ;;
+esac
+
+# ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
 
 ANZ=$(wc -l < "$LOG" | tr -d ' ')
