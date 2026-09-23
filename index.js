@@ -2882,6 +2882,11 @@ export default {
               min_score: { type: "integer", description: "Fit threshold for signals and reveal. Default 60." },
               require_signal: { type: "boolean", description: "reveal only: require an active why-now signal. Default true. Setting this to false widens who gets contacted \u2014 ask the user before you do it." },
               with_phone: { type: "boolean", description: "reveal only: also reveal a mobile number. Default false. A phone costs 10 credits per lead on top of the 3 for the email." },
+              // Der gezielte Lauf (supabase fc84890, 23.09.2026). Wie bei `lang`
+              // ist die Property die EINZIGE Stelle: der Dispatch spreadet
+              // `...args`, und die Allowlist aus #38 verwirft davor alles, was
+              // hier nicht steht. Kein zweiter Eintrag im Payload-Bau.
+              lead_ids: { type: "array", items: { type: "string" }, description: "Optional: run only on these leads instead of letting the stage choose. Use it when the user names specific companies, for a first careful run on one lead, or to pick up after an aborted run. These are `leads.id` \u2014 the `lead_id` from this tool's own dry-run candidates, from pipelineStatus top_10 or from listLeadSignals. It is NOT the `id` from listCampaignLeads: that is the campaign membership (campaign_leads.id), and passing it is not refused \u2014 it simply matches nothing, and 0 candidates reads like 'nothing left to do'. Naming leads only NARROWS: whoever the gate excludes stays excluded. One exception, and it is the point of a second attempt: in the resolve stage a named lead is taken up again even inside the two retry windows." },
               dry_run: { type: "boolean", description: "true = report candidates and estimated_credits, change nothing. Always do this first." },
               // ⚠️ OHNE DIESE PROPERTY WAR DIE SPRACHE NICHT EINSTELLBAR.
               // campaign-pipeline liest `body.lang` und reicht es an
