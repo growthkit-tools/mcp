@@ -407,6 +407,16 @@ createServer((req, res) => {
     if (req.url.startsWith("/functions/v1/campaign-pipeline")) {
       if (body.action === "status") return sende(200, STATUS_Q3);
       if (body.action === "run") {
+        // ⚠️ DIE STUFENLISTE IST TEIL DER NAHTSTELLE, nicht Dekor. campaign-
+        // pipeline prueft `STAGES.includes(stage)` und antwortet sonst mit 400
+        // (`_shared/pipeline-stages.ts`, am 24.09.2026 gelesen). Ohne diese
+        // Pruefung hier antwortete der Fake auf JEDE Stufe mit 200 — auch auf
+        // eine erfundene —, und ein Fall "die neue Stufe wird nicht abgelehnt"
+        // belegte nichts (§18a d).
+        const STAGES = ["resolve", "score", "signals", "reveal", "rescore", "rerank"];
+        if (!STAGES.includes(body.stage)) {
+          return sende(400, { error: `stage must be one of: ${STAGES.join(", ")}` });
+        }
         if (body.dry_run === true) {
           return sende(200, body.campaign_id === "38fee505-00db-45ca-8f0a-101dcf5b12ab"
             ? DRY_SIGNALS_Q3 : DRY_SIGNALS_MEDTECH);
@@ -1689,6 +1699,81 @@ case "$(echo "$PROP" | jq -r '.description')" in
   *'`leads.id`'*) ok "die Beschreibung nennt die ID-Sorte als \`leads.id\`" ;;
   *) ko "die Beschreibung nennt \`leads.id\` nicht: $(echo "$PROP" | jq -r '.description' | head -c 120)" ;;
 esac
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "P · Stufe rerank (SPEC-enrichment-verticals-v2 §6)"
+
+# rerank bewertet die Kontakte, die schon da sind, gegen die Persona — aus den
+# gespeicherten `kandidaten_liste`n, ohne Provider-Aufruf. Das Backend fuehrt die
+# Stufe bereits (`STAGES` in _shared/pipeline-stages.ts) und zeigt sie in
+# `pipelineStatus`; im Tool-Schema fehlte sie, und ein Enum ist fuer ein Modell
+# die Liste dessen, was es aufrufen darf.
+
+LT=$(mcp "$TOK_TEAM" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+PR=$(echo "$LT" | jq -c '.result.tools[] | select(.name == "pipelineRun")')
+# ⚠️ ERWARTUNG AUS DER FREMDEN QUELLE, nicht aus dem Prueflng: die sechs Namen
+# stehen woertlich in supabase `_shared/pipeline-stages.ts` (STAGES, gelesen am
+# 24.09.2026). Bekannter Treffer fuer das Instrument: `resolve` MUSS vorkommen —
+# die Stufe gibt es seit dem ersten Tag (§17a).
+STAGES_ERWARTET='["rerank","rescore","resolve","reveal","score","signals"]'
+IST=$(echo "$PR" | jq -c '.inputSchema.properties.stage.enum | sort')
+echo "$IST" | jq -e 'index("resolve")' >/dev/null \
+  && ok "der bekannte Treffer steht im Enum (resolve) — die Leseart stimmt" \
+  || ko "selbst resolve fehlt im Enum: $IST — das Instrument misst nicht, was es soll (§17a)"
+[ "$IST" = "$STAGES_ERWARTET" ] \
+  && ok "stage-Enum ist genau die Stufenliste des Backends, rerank eingeschlossen" \
+  || ko "Enum weicht ab: $IST statt $STAGES_ERWARTET"
+
+SD=$(echo "$PR" | jq -r '.inputSchema.properties.stage.description')
+case "$SD" in
+  *"rerank = re-check"*) ok "die stage-Beschreibung erklaert rerank" ;;
+  *) ko "die stage-Beschreibung erklaert rerank nicht" ;;
+esac
+# Die Abbildung der Nutzersprache ist der Teil, der im Gespraech greift: ohne
+# sie waehlt ein Modell bei "die Kontakte nochmal pruefen" weiter reveal — und
+# das kostet 3 Credits je Lead statt 0.
+case "$SD" in
+  *"Kontakte neu bewerten"*) ok "und bildet die deutsche Nutzersprache darauf ab" ;;
+  *) ko "die Abbildung 'Kontakte neu bewerten = rerank' fehlt" ;;
+esac
+CC=$(echo "$PR" | jq -r '.inputSchema.properties.confirm_credits.description')
+case "$CC" in
+  *rerank*) ok "confirm_credits nennt rerank" ;;
+  *) ko "confirm_credits nennt rerank nicht: $(echo "$CC" | head -c 90)" ;;
+esac
+# ⚠️ UND SAGT, DASS ES DORT NICHT VERLANGT WIRD. Gemessen in supabase:
+# `schaetzeCredits` gibt fuer rerank 0 zurueck, und `pruefeCreditGate` steigt bei
+# `estimated <= 0` sofort aus — die Stufe laeuft ohne Bestaetigung. Ein Text, der
+# sie in die Pflichtliste stellt, waere eine Zusage, die der Code nicht deckt.
+# ⚠️ MUSTER AUF DIE GANZE WENDUNG, nicht auf die Ziffer. `*"0"*` war gruen,
+# bevor rerank ueberhaupt im Text stand — die 409 im selben Satz traegt eine
+# Null. Dieselbe Klasse wie das zu lockere `leads.id` in Abschnitt O (§18a d).
+case "$CC" in
+  *"rerank is estimated at 0"*) ok "und sagt, dass rerank mit 0 geschaetzt wird und ohne Bestaetigung laeuft" ;;
+  *) ko "confirm_credits sagt das nicht: $(echo "$CC" | tail -c 140)" ;;
+esac
+
+# ── Der Aufruf selbst: nicht abgelehnt ──────────────────────────────────────
+N0=$(wc -l < "$LOG")
+R=$(ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"rerank","dry_run":true}')
+P=$(neu_seit "$N0" "/functions/v1/campaign-pipeline")
+if [ -z "$P" ]; then
+  ko "campaign-pipeline wurde nicht gerufen — der rerank-Aufruf hat nichts gemessen (§18a a)"
+else
+  [ "$(echo "$P" | jq -r '.body.stage')" = "rerank" ] \
+    && ok "stage=rerank kommt unveraendert beim Backend an" || ko "stage=$(echo "$P" | jq -r '.body.stage')"
+  buche "$(echo "$R" | jq -r '.result.isError')"
+  [ "$(echo "$R" | jq -r '.result.isError')" = "false" ] \
+    && ok "und wird NICHT mit 400 abgelehnt — die Stufe ist dem Backend bekannt" \
+    || ko "rerank abgelehnt: $(echo "$R" | text | head -c 100)"
+fi
+# GEGENRICHTUNG: eine erfundene Stufe MUSS abgelehnt werden. Ohne sie belegt der
+# Fall darueber nur, dass der Fake ueberhaupt antwortet.
+R=$(ruf "$TOK_TEAM" pipelineRun '{"campaign_id":"7ed61251-14c1-4017-976b-dece91f96ea3","stage":"umsortieren","dry_run":true}')
+buche "$(echo "$R" | jq -r '.result.isError')"
+[ "$(echo "$R" | jq -r '.result.isError')" = "true" ] \
+  && ok "GEGENRICHTUNG: eine erfundene Stufe wird mit 400 abgelehnt" \
+  || ko "auch 'umsortieren' laeuft durch — der Fall darueber belegt nichts"
 
 # ═════════════════════════════════════════════════════════════════════════════
 sec "H · Selbstpruefung der Tabelle"
