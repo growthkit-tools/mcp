@@ -163,5 +163,40 @@ else
 fi
 
 # =============================================================================
+sec "C · OAuth-Eingänge lehnen ab, bevor etwas geschrieben wird"
+# =============================================================================
+# Diese Fälle laufen gegen die Preview, und die spricht mit der echten
+# Supabase. Deshalb nur Anfragen, die abgelehnt werden, BEVOR geschrieben wird:
+#   * A1 liest höchstens (Client-Lookup einer UUID, die es nicht gibt).
+#   * A5 scheitert an der Anfrageform, ohne Backend-Aufruf.
+#   * G1 scheitert an der redirect_uri-Prüfung vor dem Insert.
+# ⚠️ G1 SCHREIBT NUR DESHALB NICHT, WEIL DIE PRÜFUNG VOR DEM INSERT SITZT.
+# Fällt sie weg, legt dieser Fall eine Zeile in oauth_clients an. Wer die
+# Prüfung in /register verschiebt, prüft zuerst hier.
+# Der volle Fluss (Code, Token, erfolgreiches /register) steht ausschließlich
+# in tests/oauth-transport.sh, gegen eine falsche Supabase.
+
+HDR="$TMP/hdr"
+oauth_get(){ curl -s -m 20 -o "$TMP/resp.json" -D "$HDR" -w '%{http_code}' "$BASE/authorize?$1"; }
+grund(){ grep -i '^x-gk-oauth-error:' "$HDR" | head -1 | tr -d '\r' | sed 's/^[^:]*: *//'; }
+location(){ grep -i '^location:' "$HDR" | head -1 | tr -d '\r'; }
+ZUFALL=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "00000000-0000-4000-8000-$(date +%s%N | tail -c 13)")
+REDIR="https%3A%2F%2Fclient.invalid%2Fcb"
+
+CODE=$(oauth_get "response_type=code&client_id=$ZUFALL&redirect_uri=$REDIR&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256")
+eq "A1 /authorize, unbekannte client_id: 400"  "$CODE"    "400"
+eq "A1 … Grund"                                "$(grund)" "invalid_client"
+eq "A1 … keine Weiterleitung"                  "$(location)" ""
+
+CODE=$(oauth_get "response_type=code&client_id=$ZUFALL&redirect_uri=$REDIR")
+eq "A5 /authorize ohne code_challenge: 400"    "$CODE"    "400"
+eq "A5 … Grund"                                "$(grund)" "invalid_request"
+
+CODE=$(curl -s -m 20 -X POST "$BASE/register" -H 'content-type: application/json' \
+  -d '{"redirect_uris":["javascript:alert(1)"]}' -o "$TMP/resp.json" -w '%{http_code}')
+eq "G1 /register mit javascript:-URI: 400"     "$CODE" "400"
+eq "G1 … Fehler"                               "$(jqr '.error')" "invalid_redirect_uri"
+
+# =============================================================================
 printf '\n\033[1m%s\033[0m\n' "Ergebnis: $PASS grün, $FAIL rot"
 [ "$FAIL" -eq 0 ] || exit 1

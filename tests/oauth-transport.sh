@@ -70,6 +70,24 @@ CODE_OK="code-5555555-5555-4555-8555-555555555555"
 ID_TOKEN="99999999-9999-4999-8999-999999999999"   # oauth_tokens.id (Handle)
 ID_CODE="88888888-8888-4888-8888-888888888888"    # oauth_codes.id  (Handle)
 
+# Client-Bindung und PKCE (Abschnitte F–J). client_id ist kein Geheimnis; die
+# Werte sind Attrappen in UUID-Form, weil der Worker nur diese Form nachschlaegt.
+CLIENT_OK="c0000000-0000-4000-8000-00000000c001"     # registriert: https://client.invalid/cb
+CLIENT_LABEL="c0000000-0000-4000-8000-00000000c002"  # registriert: https://x.invalid/claude.ai/cb
+CLIENT_FREMD="c0000000-0000-4000-8000-00000000c0ff"  # registriert, aber nicht der des Codes
+CLIENT_UNBEKANNT="c0000000-0000-4000-8000-00000000dead"
+REDIR_OK="https://client.invalid/cb"
+# PKCE-Verifier: 43+ Zeichen (RFC 7636 §4.1). Die Challenge rechnet der Fake
+# selbst aus demselben Wert — eine zweite, hier hingeschriebene Challenge waere
+# eine zweite Wahrheit (§7a).
+VERIFIER_OK="verifier-ok-0123456789abcdefghijklmnopqrstuvwxyz"
+VERIFIER_P1="verifier-p1-0123456789abcdefghijklmnopqrstuvwxyz"
+CODE_T1="code-t1-00000000-0000-4000-8000-0000000000t1"
+CODE_T2="code-t2-00000000-0000-4000-8000-0000000000t2"
+CODE_T3="code-t3-00000000-0000-4000-8000-0000000000t3"
+CODE_T4="code-t4-00000000-0000-4000-8000-0000000000t4"
+ID_T4="88888888-8888-4888-8888-0000000000f4"
+
 # ── Der Fake ─────────────────────────────────────────────────────────────────
 # Er spricht die drei RPCs aus supabase#124 und die Schreibpfade dahinter. Die
 # ALTEN Wege (`?access_token=eq.` usw.) beantwortet er mit 500: liefe der Worker
@@ -78,6 +96,7 @@ ID_CODE="88888888-8888-4888-8888-888888888888"    # oauth_codes.id  (Handle)
 cat > "$FIX/fake.mjs" <<'FAKE'
 import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 
 const LOG = process.env.LOG_PATH;
 const E = process.env;
@@ -92,13 +111,35 @@ const tokenZeile = (extra) => ({
   user_token: "gk_view_faketoken", is_demo: false, mcp_client: "claude", lang: "de",
   created_at: new Date(jetzt).toISOString(), ...extra,
 });
-const codeZeile = {
+const s256 = (v) => createHash("sha256").update(v).digest("base64url");
+const codeZeile = (extra) => ({
   id: E.ID_CODE, client_id: "test-client", redirect_uri: "https://client.invalid/cb",
   expires_at: jetzt + 600_000, resource: null,
-  code_challenge: null, code_challenge_method: null,
+  code_challenge: s256(E.VERIFIER_OK), code_challenge_method: "S256",
   scope: "mcp:read", user_token: "gk_view_faketoken",
-  is_demo: false, mcp_client: "claude", lang: "de",
-};
+  is_demo: false, mcp_client: "claude", lang: "de", ...extra,
+});
+
+// ⚠️ DIE CODES SIND ZUSTAND, nicht Konstante. Ein DELETE auf ?id=eq.<id> nimmt
+// die Zeile heraus, und der naechste RPC-Aufruf findet sie nicht mehr — so wie
+// die Datenbank. Ohne das waere "nach einem Fehlversuch ist der Code
+// verbraucht" (T4) nicht messbar: ein zustandsloser Fake liefert denselben
+// Code beliebig oft.
+const codes = new Map([
+  [E.CODE_OK, codeZeile({})],
+  [E.CODE_T1, codeZeile({ id: randomUUID(), client_id: E.CLIENT_OK })],
+  [E.CODE_T2, codeZeile({ id: randomUUID(), client_id: E.CLIENT_OK })],
+  [E.CODE_T3, codeZeile({ id: randomUUID(), client_id: E.CLIENT_OK })],
+  [E.CODE_T4, codeZeile({ id: E.ID_T4, client_id: E.CLIENT_OK })],
+]);
+
+// oauth_clients — Feldnamen aus der Tabelle: client_id, client_name, redirect_uris.
+// client_name traegt absichtlich Markup: es muss escaped ankommen.
+const clients = new Map([
+  [E.CLIENT_OK,    { client_id: E.CLIENT_OK,    client_name: "Test <b>Client</b>", redirect_uris: ["https://client.invalid/cb"] }],
+  [E.CLIENT_LABEL, { client_id: E.CLIENT_LABEL, client_name: "Label-Client",       redirect_uris: ["https://x.invalid/claude.ai/cb"] }],
+  [E.CLIENT_FREMD, { client_id: E.CLIENT_FREMD, client_name: "Fremd",              redirect_uris: ["https://client.invalid/cb"] }],
+]);
 
 createServer((req, res) => {
   let roh = "";
@@ -122,7 +163,8 @@ createServer((req, res) => {
       return sende(200, body.p_refresh_token === E.REF_OK ? [tokenZeile({})] : []);
     }
     if (req.url === "/rest/v1/rpc/gk_oauth_code_by_code") {
-      return sende(200, body.p_code === E.CODE_OK ? [codeZeile] : []);
+      const z = codes.get(body.p_code);
+      return sende(200, z ? [z] : []);
     }
     if (req.url.startsWith("/rest/v1/rpc/resolve_user_token")) return sende(200, "11111111-1111-1111-1111-111111111111");
     if (req.url.startsWith("/rest/v1/rpc/gk_meter")) return sende(200, [{ over_limit: false, new_count: 1, effective_limit: 100000 }]);
@@ -130,7 +172,33 @@ createServer((req, res) => {
     // Schreibpfade — erlaubt ist nur der Filter auf die id.
     if (req.url.startsWith("/rest/v1/oauth_tokens?id=eq.") && req.method === "PATCH") return sende(204, {});
     if (req.url === "/rest/v1/oauth_tokens" && req.method === "POST") return sende(201, {});
-    if (req.url.startsWith("/rest/v1/oauth_codes?id=eq.") && req.method === "DELETE") return sende(204, {});
+    if (req.url.startsWith("/rest/v1/oauth_codes?id=eq.") && req.method === "DELETE") {
+      const id = req.url.slice("/rest/v1/oauth_codes?id=eq.".length);
+      for (const [c, z] of codes) if (z.id === id) codes.delete(c);
+      return sende(204, {});
+    }
+    // /authorize legt den Code an; der Fake nimmt ihn in den Speicher auf, damit
+    // der volle Fluss (P1) ihn danach einloesen kann.
+    if (req.url === "/rest/v1/oauth_codes" && req.method === "POST") {
+      codes.set(body.code, { id: randomUUID(), resource: null, ...body });
+      return sende(201, {});
+    }
+    // Client-Lookup. client_id ist kein Geheimnis und darf im Query-String
+    // stehen — die Transportregel dieser Suite gilt Codes und Tokens.
+    if (req.url.startsWith("/rest/v1/oauth_clients?") && req.method === "GET") {
+      const q = new URL(req.url, "http://fake").searchParams;
+      const id = String(q.get("client_id") || "").replace(/^eq\./, "");
+      const c = clients.get(id);
+      return sende(200, c ? [c] : []);
+    }
+    if (req.url === "/rest/v1/oauth_clients" && req.method === "POST") return sende(201, {});
+    // Token-Pruefung beim POST /authorize (n8n-embed validate_token).
+    // `gk_view_netzfehler` reisst die Verbindung ab — so sieht ein Netzfehler
+    // fuer den Worker aus: fetch wirft, statt eine Antwort zu liefern.
+    if (req.url === "/functions/v1/n8n-embed" && body.action === "validate_token") {
+      if (body.user_token === "gk_view_netzfehler") { req.socket.destroy(); return; }
+      return sende(200, { valid: body.user_token === "gk_view_faketoken" });
+    }
 
     // Die alten Wege. 500 statt 200: ein Rueckfall soll nicht bloss auffallen,
     // sondern scheitern.
@@ -145,6 +213,9 @@ FAKE
 LOG_PATH="$LOG" PORT="$FAKE_PORT" \
   ACC_OK="$ACC_OK" ACC_DEMO="$ACC_DEMO" ACC_EXP="$ACC_EXP" REF_OK="$REF_OK" CODE_OK="$CODE_OK" \
   ID_TOKEN="$ID_TOKEN" ID_CODE="$ID_CODE" \
+  CLIENT_OK="$CLIENT_OK" CLIENT_LABEL="$CLIENT_LABEL" CLIENT_FREMD="$CLIENT_FREMD" \
+  VERIFIER_OK="$VERIFIER_OK" CODE_T1="$CODE_T1" CODE_T2="$CODE_T2" CODE_T3="$CODE_T3" \
+  CODE_T4="$CODE_T4" ID_T4="$ID_T4" \
   node "$FIX/fake.mjs" &
 FAKE_PID=$!
 
@@ -159,8 +230,12 @@ else
 fi
 
 # ── Die Instanz ──────────────────────────────────────────────────────────────
+# `--persist-to` in das Wegwerf-Verzeichnis: das Registrierungs-Limit (Abschnitt
+# J) zaehlt im KV, und der Standardort .wrangler/state ueberlebt den Lauf. Ohne
+# frisches KV waere der zweite Lauf binnen einer Stunde anders als der erste.
 ( cd "$REPO_ROOT" && npx --no-install wrangler dev \
     --port "$DEV_PORT" --ip 127.0.0.1 --show-interactive-dev-session false \
+    --persist-to "$FIX/state" \
     --var "SUPABASE_URL:http://127.0.0.1:$FAKE_PORT" \
     --var "SUPABASE_SECRET_KEY:sb_secret_attrappe" \
     --var "N8N_AUTH_TOKEN:attrappe" \
@@ -287,7 +362,11 @@ T=$(tok_endpunkt '{"grant_type":"refresh_token","client_id":"test-client","refre
 # ═════════════════════════════════════════════════════════════════════════════
 sec "C · grant_type=authorization_code (:4454 Lookup, :4473 DELETE)"
 
-T=$(tok_endpunkt "{\"grant_type\":\"authorization_code\",\"client_id\":\"test-client\",\"code\":\"$CODE_OK\"}")
+# Ein VOLLSTAENDIGER Grant: redirect_uri und code_verifier gehoeren dazu. Bis
+# zum 29.09.2026 stand hier ein Aufruf ohne beides — er war gruen, weil der
+# Worker beides nur pruefte, wenn es mitkam. Gegenstand dieses Abschnitts ist
+# der Transportweg, nicht die Bindung; die steht in Abschnitt H.
+T=$(tok_endpunkt "{\"grant_type\":\"authorization_code\",\"client_id\":\"test-client\",\"code\":\"$CODE_OK\",\"redirect_uri\":\"$REDIR_OK\",\"code_verifier\":\"$VERIFIER_OK\"}")
 A=$(letzte "/rest/v1/rpc/gk_oauth_code_by_code")
 if [ -z "$A" ]; then
   ko "gk_oauth_code_by_code wurde nicht gerufen"
@@ -354,6 +433,272 @@ ALT=$(jq -r 'select(.pfad | test("/rest/v1/oauth_(tokens|codes)\\?(access_token|
   || ko "$ALT Aufrufe gehen noch den alten Weg"
 
 # ═════════════════════════════════════════════════════════════════════════════
+# CLIENT-BINDUNG UND PKCE (F–J)
+#
+# Was erzwungen wird:
+#   * /authorize nimmt nur registrierte Clients an, und die redirect_uri muss
+#     exakt einer ihrer registrierten redirect_uris entsprechen. Scheitert das,
+#     antwortet eine Fehlerseite — ohne Weiterleitung (RFC 6749 §4.1.2.1).
+#   * PKCE mit S256 ist Pflicht; `plain` wird nicht mehr angenommen.
+#   * Die Consent-Seite gibt nur erlaubte Parameter zurueck, alles escaped, und
+#     nennt den Host, an den weitergeleitet wird.
+#   * /token prueft client_id, redirect_uri und code_verifier gegen den Code;
+#     ein Code ist nach dem ersten Einloeseversuch verbraucht, auch einem
+#     fehlgeschlagenen.
+#   * /register nimmt nur plausible Metadaten an und zaehlt pro IP.
+#
+# ⚠️ WARUM EIN GRUND-HEADER. Jede Ablehnung von /authorize traegt
+# `x-gk-oauth-error` (invalid_client | invalid_redirect_uri | invalid_request |
+# temporarily_unavailable). Ohne ihn waere eine 400 aus dem falschen Grund —
+# etwa ein gescheiterter Client-Lookup statt der redirect_uri-Pruefung — von der
+# richtigen nicht zu unterscheiden (§18a g).
+# ═════════════════════════════════════════════════════════════════════════════
+
+qs(){ # name wert [name wert …] -> Query-String, Namen UND Werte kodiert
+  local out="" k v
+  while [ $# -ge 2 ]; do
+    k=$(jq -rn --arg s "$1" '$s|@uri'); v=$(jq -rn --arg s "$2" '$s|@uri')
+    out="${out:+$out&}$k=$v"; shift 2
+  done
+  printf '%s' "$out"
+}
+AB="$FIX/antwort.body"; AH="$FIX/antwort.hdr"
+auth_get(){ curl -s -m 20 -o "$AB" -D "$AH" -w '%{http_code}' -H "accept-language: ${2:-en}" "$BASE/authorize?$1"; }
+auth_post(){ curl -s -m 20 -o "$AB" -D "$AH" -w '%{http_code}' -X POST "$BASE/authorize" \
+  -H 'content-type: application/x-www-form-urlencoded' --data-binary "$1"; }
+registrieren(){ curl -s -m 20 -o "$AB" -D "$AH" -w '%{http_code}' -X POST "$BASE/register" \
+  -H 'content-type: application/json' --data-binary "$1"; }
+location(){ grep -i '^location:' "$AH" | head -1 | tr -d '\r' | sed 's/^[^:]*: *//'; }
+grund(){ grep -i '^x-gk-oauth-error:' "$AH" | head -1 | tr -d '\r' | sed 's/^[^:]*: *//'; }
+formulare(){ grep -c '<form' "$AB"; }
+client_inserts(){ jq -r 'select(.pfad == "/rest/v1/oauth_clients" and .methode == "POST") | .pfad' "$LOG" | wc -l | tr -d ' '; }
+s256(){ node -e 'process.stdout.write(require("crypto").createHash("sha256").update(process.argv[1]).digest("base64url"))' "$1"; }
+# Eine Ablehnung ohne Weiterleitung, aus dem genannten Grund.
+abgelehnt(){ # fall status erwartet-status erwartet-grund
+  local l; l=$(location)
+  if [ "$2" = "$3" ] && [ -z "$l" ] && [ "$(formulare)" = 0 ] && [ "$(grund)" = "$4" ]; then
+    ok "$1: $3 ($4), keine Weiterleitung, kein Formular"
+  else
+    ko "$1: HTTP $2 (erwartet $3), Grund '$(grund)' (erwartet $4), Location '${l:-}', Formulare $(formulare)"
+  fi
+}
+
+CH_OK=$(s256 "$VERIFIER_OK"); CH_P1=$(s256 "$VERIFIER_P1")
+[ ${#CH_OK} -eq 43 ] && ok "S256-Challenge berechnet (43 Zeichen base64url)" || ko "S256-Challenge kaputt: '$CH_OK'"
+GUELTIG=$(qs response_type code client_id "$CLIENT_OK" redirect_uri "$REDIR_OK" state st-1 code_challenge "$CH_OK" code_challenge_method S256)
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "F · GET /authorize — nur registrierte Clients und exakte redirect_uri"
+
+# Die Discovery sagt, was /authorize annimmt: nur noch S256.
+M=$(curl -s -m 20 "$BASE/.well-known/oauth-authorization-server" | jq -c '.code_challenge_methods_supported')
+[ "$M" = '["S256"]' ] && ok "M1 AS-Metadata: code_challenge_methods_supported = [\"S256\"]" || ko "M1 AS-Metadata: $M"
+
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_UNBEKANNT" redirect_uri "$REDIR_OK" code_challenge "$CH_OK" code_challenge_method S256)")
+abgelehnt "A1 unbekannte client_id" "$C" 400 invalid_client
+
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "https://anders.invalid/cb" code_challenge "$CH_OK" code_challenge_method S256)")
+abgelehnt "A2 redirect_uri nicht registriert" "$C" 400 invalid_redirect_uri
+
+# Der registrierte Wert steht als TEIL dieser URI darin (Pfad beginnt mit einem
+# bekannten Hostnamen). Exakter Vergleich heisst: das zaehlt nicht.
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "https://fremd.invalid/claude.ai/cb" code_challenge "$CH_OK" code_challenge_method S256)")
+abgelehnt "A3 redirect_uri enthaelt nur einen bekannten Namen im Pfad" "$C" 400 invalid_redirect_uri
+
+# Parameter-NAMEN werden nicht in die Seite uebernommen, Werte escaped.
+C=$(auth_get "$GUELTIG&$(qs '"><script>gk_marker</script>' 1)")
+{ [ "$C" = 200 ] && ! grep -q '<script>gk_marker' "$AB"; } \
+  && ok "A4 fremder Parametername: Seite rendert (200), der Name erscheint nicht als Markup" \
+  || ko "A4 fremder Parametername: HTTP $C, Markup im Body: $(grep -c '<script>gk_marker' "$AB")"
+# ⚠️ ZWEI SCHICHTEN, ZWEI FAELLE. A4 bleibt auch dann gruen, wenn ALLE
+# Parameter wieder Hidden-Fields werden — solange ihre Namen escaped sind. Ob
+# nur die erlaubten Parameter uebernommen werden, prueft erst ein harmloser,
+# unbekannter Parameter: er darf gar nicht erst erscheinen (§18a d).
+C=$(auth_get "$GUELTIG&$(qs fremd_param wert-x)")
+{ [ "$C" = 200 ] && ! grep -q 'fremd_param' "$AB"; } \
+  && ok "A4c unbekannter Parameter wird nicht als Hidden-Field uebernommen" \
+  || ko "A4c unbekannter Parameter: HTTP $C, im Body $(grep -c 'fremd_param' "$AB")"
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "$REDIR_OK" state '"><b>st</b>' code_challenge "$CH_OK" code_challenge_method S256)")
+{ [ "$C" = 200 ] && ! grep -q '<b>st</b>' "$AB" && grep -q '&lt;b&gt;st' "$AB"; } \
+  && ok "A4b Parameterwert (state) kommt escaped in die Seite" \
+  || ko "A4b state-Wert: HTTP $C, roh $(grep -c '<b>st</b>' "$AB"), escaped $(grep -c '&lt;b&gt;st' "$AB")"
+
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "$REDIR_OK")")
+abgelehnt "A5 ohne code_challenge" "$C" 400 invalid_request
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "$REDIR_OK" code_challenge "$VERIFIER_OK" code_challenge_method plain)")
+abgelehnt "A5b code_challenge_method=plain" "$C" 400 invalid_request
+C=$(auth_get "$(qs response_type token client_id "$CLIENT_OK" redirect_uri "$REDIR_OK" code_challenge "$CH_OK" code_challenge_method S256)")
+abgelehnt "A5c response_type=token" "$C" 400 invalid_request
+
+# Die Consent-Seite nennt, wohin weitergeleitet wird — sprachabhaengig wie der
+# Rest der Seite. client_name ist frei waehlbar: er erscheint escaped und nur
+# als Selbstauskunft, nicht in der Ueberschrift.
+# ⚠️ HOST DIREKT HINTER DER WENDUNG, nicht irgendwo im Body. Der Host steht
+# ohnehin im Hidden-Feld redirect_uri — eine getrennte Suche nach ihm waere
+# auch ohne die neue Zeile gruen (§18a d). Zwischen Wendung und Host sind nur
+# Doppelpunkt, Leerraum und Tags erlaubt — in BELIEBIGER Folge. Die erste
+# Fassung liess Leerraum nur vor einem Tag zu; die Gegenprobe "<strong> host"
+# (semantisch dasselbe) war damit rot.
+nach_wendung(){ grep -qE "$1:?( |&nbsp;|<[^>]+>)*$2" "$AB"; }
+C=$(auth_get "$GUELTIG" de)
+{ [ "$C" = 200 ] && nach_wendung 'Weiterleitung an' 'client\.invalid'; } \
+  && ok "A7 Consent (de): 'Weiterleitung an' + Host client.invalid" \
+  || ko "A7 Consent (de): HTTP $C, 'Weiterleitung an' $(grep -c 'Weiterleitung an' "$AB")"
+C=$(auth_get "$GUELTIG" en)
+{ [ "$C" = 200 ] && nach_wendung 'Redirects to' 'client\.invalid'; } \
+  && ok "A7b Consent (en): 'Redirects to' + Host" \
+  || ko "A7b Consent (en): HTTP $C, 'Redirects to' $(grep -c 'Redirects to' "$AB")"
+{ grep -q 'Test &lt;b&gt;Client&lt;/b&gt;' "$AB" && ! grep -q '<b>Client</b>' "$AB" && ! grep -q 'Connect Test' "$AB"; } \
+  && ok "A7c client_name erscheint escaped und nicht in der Ueberschrift" \
+  || ko "A7c client_name: escaped $(grep -c 'Test &lt;b&gt;Client' "$AB"), roh $(grep -c '<b>Client</b>' "$AB"), in Ueberschrift $(grep -c 'Connect Test' "$AB")"
+
+# Das Label der Ueberschrift kommt aus dem HOSTNAMEN, nicht aus einem Teilstring
+# der ganzen URI. Dieser Client ist mit genau dieser URI registriert — die Seite
+# rendert also, darf ihn aber nicht als bekannten Client ausweisen.
+C=$(auth_get "$(qs response_type code client_id "$CLIENT_LABEL" redirect_uri "https://x.invalid/claude.ai/cb" code_challenge "$CH_OK" code_challenge_method S256)")
+{ [ "$C" = 200 ] && ! grep -q 'Connect Claude' "$AB" && nach_wendung 'Redirects to' 'x\.invalid'; } \
+  && ok "A11 Label nach Hostname: x.invalid/claude.ai/... ist nicht 'Claude', Ziel x.invalid genannt" \
+  || ko "A11 Label: HTTP $C, 'Connect Claude' $(grep -c 'Connect Claude' "$AB")"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "G · POST /authorize — dieselben Pruefungen, die Formularfelder sind Eingaben"
+
+POST_OK="$GUELTIG&$(qs user_token gk_view_faketoken)"
+C=$(auth_post "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "https://fremd.invalid/cb" state st-1 code_challenge "$CH_OK" code_challenge_method S256 user_token gk_view_faketoken)")
+abgelehnt "A6 geaendertes Formularfeld redirect_uri" "$C" 400 invalid_redirect_uri
+C=$(auth_post "$(qs response_type code client_id "$CLIENT_UNBEKANNT" redirect_uri "$REDIR_OK" code_challenge "$CH_OK" code_challenge_method S256 user_token gk_view_faketoken)")
+abgelehnt "A6b unbekannte client_id im Formular" "$C" 400 invalid_client
+C=$(auth_post "$(qs response_type code client_id "$CLIENT_OK" redirect_uri "$REDIR_OK" code_challenge "$VERIFIER_OK" code_challenge_method plain user_token gk_view_faketoken)")
+abgelehnt "A6c code_challenge_method=plain im Formular" "$C" 400 invalid_request
+
+# Die Token-Pruefung ist nicht erreichbar -> abbrechen, nicht weiterlaufen.
+C=$(auth_post "$GUELTIG&$(qs user_token gk_view_netzfehler)")
+abgelehnt "A9 Token-Pruefung nicht erreichbar" "$C" 503 temporarily_unavailable
+
+# Der Wiederholungslink bei ungueltigem Token traegt nur erlaubte Parameter.
+C=$(auth_post "$GUELTIG&$(qs user_token kein-gk-token fremd_param wert-x)")
+{ [ "$C" = 400 ] && grep -q 'client_id=' "$AB" && ! grep -q 'fremd_param' "$AB"; } \
+  && ok "A12 Wiederholungslink: client_id drin, fremder Parameter nicht" \
+  || ko "A12 Wiederholungslink: HTTP $C, client_id $(grep -c 'client_id=' "$AB"), fremd_param $(grep -c 'fremd_param' "$AB")"
+
+# ── P1: der volle Fluss, muss gruen sein und bleiben ─────────────────────────
+Q=$(qs response_type code client_id "$CLIENT_OK" redirect_uri "$REDIR_OK" state st-p1 code_challenge "$CH_P1" code_challenge_method S256 resource "$BASE" scope "mcp:read mcp:write")
+C1=$(auth_get "$Q"); F1=$(formulare)
+C2=$(auth_post "$Q&$(qs user_token gk_view_faketoken)"); LOC=$(location)
+P1_CODE=$(printf '%s' "$LOC" | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')
+T=$(tok_endpunkt "$(jq -cn --arg c "$CLIENT_OK" --arg code "$P1_CODE" --arg r "$REDIR_OK" --arg v "$VERIFIER_P1" \
+  '{grant_type:"authorization_code", client_id:$c, code:$code, redirect_uri:$r, code_verifier:$v}')")
+{ [ "$C1" = 200 ] && [ "$F1" -gt 0 ]; } && ok "P1 GET: Consent-Seite mit Formular" || ko "P1 GET: HTTP $C1, Formulare $F1"
+case "$LOC" in
+  "$REDIR_OK?code="*state=st-p1*) ok "P1 POST: 302 an die registrierte redirect_uri, mit code und state" ;;
+  *) ko "P1 POST: HTTP $C2, Location '$LOC'" ;;
+esac
+[ -n "$(echo "$T" | jq -r '.access_token // ""')" ] \
+  && ok "P1 token: access_token mit S256-Verifier, exakter redirect_uri, passender client_id" \
+  || ko "P1 token: $(echo "$T" | head -c 160)"
+I=$(jq -c --arg c "$P1_CODE" 'select(.pfad == "/rest/v1/oauth_codes" and .methode == "POST" and .body.code == $c)' "$LOG" | tail -1)
+[ "$(echo "$I" | jq -r '.body.resource // "fehlt"')" = "$BASE" ] \
+  && ok "A8 der Code traegt die resource aus der Anfrage" \
+  || ko "A8 resource im Code-Insert: $(echo "$I" | jq -r '.body.resource // "fehlt"')"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "H · /token — der Code ist an client_id, redirect_uri und Verifier gebunden"
+
+tok(){ tok_endpunkt "$(jq -cn "$@")"; }
+T=$(tok --arg c "$CLIENT_OK" --arg code "$CODE_T1" --arg r "$REDIR_OK" \
+  '{grant_type:"authorization_code", client_id:$c, code:$code, redirect_uri:$r}')
+[ "$(echo "$T" | jq -r '.error')" = "invalid_grant" ] && ok "T1 ohne code_verifier -> invalid_grant" || ko "T1: $(echo "$T" | head -c 120)"
+T=$(tok --arg c "$CLIENT_FREMD" --arg code "$CODE_T2" --arg r "$REDIR_OK" --arg v "$VERIFIER_OK" \
+  '{grant_type:"authorization_code", client_id:$c, code:$code, redirect_uri:$r, code_verifier:$v}')
+[ "$(echo "$T" | jq -r '.error')" = "invalid_grant" ] && ok "T2 andere client_id als beim Code -> invalid_grant" || ko "T2: $(echo "$T" | head -c 120)"
+T=$(tok --arg c "$CLIENT_OK" --arg code "$CODE_T3" --arg v "$VERIFIER_OK" \
+  '{grant_type:"authorization_code", client_id:$c, code:$code, code_verifier:$v}')
+[ "$(echo "$T" | jq -r '.error')" = "invalid_grant" ] && ok "T3 ohne redirect_uri -> invalid_grant" || ko "T3: $(echo "$T" | head -c 120)"
+
+T=$(tok --arg c "$CLIENT_OK" --arg code "$CODE_T4" --arg r "$REDIR_OK" \
+  '{grant_type:"authorization_code", client_id:$c, code:$code, redirect_uri:$r, code_verifier:"falscher-verifier-0123456789abcdefghijklmnop"}')
+# ⚠️ DIE METHODE, nicht nur der Pfad: ein GET auf denselben Pfad hinterliesse
+# dieselbe Spur im Log und liesse den Code stehen (bei der Falsifikation so
+# gesehen — die erste Fassung pruefte nur den Pfad und blieb gruen).
+[ "$(letzte "/rest/v1/oauth_codes?id=eq.$ID_T4" | jq -r '.methode // ""')" = "DELETE" ] \
+  && ok "T4a ein fehlgeschlagener Einloeseversuch loescht den Code (DELETE)" \
+  || ko "T4a nach dem Fehlversuch kein DELETE auf den Code (Antwort: $(echo "$T" | head -c 80))"
+T=$(tok --arg c "$CLIENT_OK" --arg code "$CODE_T4" --arg r "$REDIR_OK" --arg v "$VERIFIER_OK" \
+  '{grant_type:"authorization_code", client_id:$c, code:$code, redirect_uri:$r, code_verifier:$v}')
+[ "$(echo "$T" | jq -r '.error')" = "invalid_grant" ] \
+  && ok "T4 derselbe Code danach mit korrekten Werten -> invalid_grant (verbraucht)" \
+  || ko "T4 zweiter Versuch: $(echo "$T" | head -c 120)"
+
+T=$(tok --arg r "$REF_OK" '{grant_type:"refresh_token", client_id:"fremder-client", refresh_token:$r}')
+[ "$(echo "$T" | jq -r '.error')" = "invalid_grant" ] && ok "R1 refresh mit anderer client_id -> invalid_grant" || ko "R1: $(echo "$T" | head -c 120)"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "I · /register — nur plausible Metadaten, ohne Insert bei Verstoss"
+
+REG_OK=0   # erfolgreiche Registrierungen im Lauf — Grundlage fuer J
+reg_abgelehnt(){ # fall json erwarteter-fehler
+  local vor c; vor=$(client_inserts); c=$(registrieren "$2")
+  if [ "$c" = 400 ] && [ "$(jq -r '.error' "$AB")" = "$3" ] && [ "$(client_inserts)" = "$vor" ]; then
+    ok "$1: 400 $3, kein Insert"
+  else
+    ko "$1: HTTP $c, error '$(jq -r '.error' "$AB" 2>/dev/null)' (erwartet $3), Inserts $vor -> $(client_inserts)"
+  fi
+}
+reg_angenommen(){ # fall json
+  local vor c; vor=$(client_inserts); c=$(registrieren "$2")
+  if [ "${c:0:1}" = 2 ] && [ -n "$(jq -r '.client_id // ""' "$AB")" ] && [ "$(client_inserts)" = $((vor + 1)) ]; then
+    ok "$1: HTTP $c, client_id vergeben, genau ein Insert"; REG_OK=$((REG_OK + 1))
+  else
+    ko "$1: HTTP $c, Antwort $(head -c 100 "$AB"), Inserts $vor -> $(client_inserts)"
+  fi
+}
+
+reg_abgelehnt "G1 javascript:-URI"        '{"redirect_uris":["javascript:alert(1)"]}'      invalid_redirect_uri
+reg_abgelehnt "G1b data:-URI"             '{"redirect_uris":["data:text/html,x"]}'         invalid_redirect_uri
+reg_abgelehnt "G1c leeres redirect_uris"  '{"redirect_uris":[]}'                           invalid_redirect_uri
+reg_abgelehnt "G1d http auf fremdem Host" '{"redirect_uris":["http://fremd.invalid/cb"]}'  invalid_redirect_uri
+reg_abgelehnt "G1e mit Fragment"          '{"redirect_uris":["https://a.invalid/cb#x"]}'   invalid_redirect_uri
+reg_abgelehnt "G1f file:-URI"             '{"redirect_uris":["file:///tmp/x"]}'            invalid_redirect_uri
+reg_abgelehnt "G1g keine URL"             '{"redirect_uris":["kein url"]}'                 invalid_redirect_uri
+reg_abgelehnt "G1h elf Eintraege"         "$(jq -cn '{redirect_uris:[range(11)|"https://a.invalid/cb\(.)"]}')" invalid_redirect_uri
+reg_abgelehnt "G1i Eintrag ueber 2000 Zeichen" "$(jq -cn '{redirect_uris:["https://a.invalid/" + ("x"*2000)]}')" invalid_redirect_uri
+reg_abgelehnt "G1j unbekannte token_endpoint_auth_method" \
+  '{"redirect_uris":["https://a.invalid/cb"],"token_endpoint_auth_method":"private_key_jwt"}' invalid_client_metadata
+
+# GEGENPROBEN — muessen gruen sein und bleiben.
+reg_angenommen "P2 https://claude.ai/api/mcp/auth_callback" '{"redirect_uris":["https://claude.ai/api/mcp/auth_callback"],"token_endpoint_auth_method":"none"}'
+reg_angenommen "P3 http://localhost:6274/oauth/callback (Inspector)" '{"redirect_uris":["http://localhost:6274/oauth/callback"],"token_endpoint_auth_method":"none"}'
+reg_angenommen "P4 cursor:// (Custom Scheme aus der Allowlist)" '{"redirect_uris":["cursor://anysphere.cursor-retrieval/oauth/callback"],"token_endpoint_auth_method":"none"}'
+
+# client_name wird gekuerzt und von Steuerzeichen befreit, bevor er gespeichert wird.
+LANGNAME="$(printf 'Name\tmit\001Steuer')$(printf 'x%.0s' $(seq 1 150))"
+reg_angenommen "G1k client_name mit Steuerzeichen und Ueberlaenge" "$(jq -cn --arg n "$LANGNAME" '{redirect_uris:["https://name.invalid/cb"], client_name:$n}')"
+N=$(jq -r 'select(.pfad == "/rest/v1/oauth_clients" and .methode == "POST") | .body.client_name' "$LOG" | tail -1)
+{ [ ${#N} -le 100 ] && ! printf '%s' "$N" | grep -q '[[:cntrl:]]'; } \
+  && ok "G1l gespeicherter client_name: ${#N} Zeichen, keine Steuerzeichen" \
+  || ko "G1l gespeicherter client_name: ${#N} Zeichen, Steuerzeichen $(printf '%s' "$N" | grep -c '[[:cntrl:]]')"
+
+# ═════════════════════════════════════════════════════════════════════════════
+sec "J · /register — 20 Registrierungen pro Stunde und IP"
+
+# Gezaehlt werden ANGENOMMENE Registrierungen: die abgelehnten aus I kommen vor
+# dem Zaehler und schreiben nichts, auch nicht ins KV. Deshalb steht die Grenze
+# nach genau 20 Annahmen im ganzen Lauf, nicht nach 20 Anfragen.
+ERSTE_429=""
+for i in $(seq 1 25); do
+  vor=$(client_inserts)
+  c=$(registrieren '{"redirect_uris":["https://limit.invalid/cb"],"token_endpoint_auth_method":"none"}')
+  if [ "$c" = 429 ]; then
+    ERSTE_429="$REG_OK"; [ "$(client_inserts)" = "$vor" ] || ERSTE_429="$ERSTE_429+insert"
+    break
+  fi
+  [ "${c:0:1}" = 2 ] && REG_OK=$((REG_OK + 1))
+done
+[ "$ERSTE_429" = 20 ] \
+  && ok "G2 die 21. Registrierung im Lauf wird mit 429 abgelehnt, ohne Insert" \
+  || ko "G2 erste 429 nach '${ERSTE_429:-keiner}' angenommenen Registrierungen (erwartet 20, ohne Insert)"
+
+# ═════════════════════════════════════════════════════════════════════════════
 sec "E · Selbstpruefung der Tabelle"
 
 FEHLT=""
@@ -363,6 +708,17 @@ done
 [ -z "$FEHLT" ] \
   && ok "alle drei RPCs kamen im Lauf vor" \
   || ko "nicht gerufen:$FEHLT — die zugehoerigen Abschnitte haben nichts gemessen (§18a a)"
+
+# Die Abschnitte F–J brauchen vier weitere Wege im Fake. Kam einer nie vor,
+# haben die Faelle daran nichts gemessen — etwa ein 400 ohne jeden Client-Lookup.
+FEHLT=""
+jq -e 'select(.pfad | startswith("/rest/v1/oauth_clients?")) | select(.methode == "GET")' "$LOG" >/dev/null 2>&1 || FEHLT="$FEHLT client-lookup"
+jq -e 'select(.pfad == "/rest/v1/oauth_codes" and .methode == "POST")' "$LOG" >/dev/null 2>&1 || FEHLT="$FEHLT code-insert"
+jq -e 'select(.body.action == "validate_token")' "$LOG" >/dev/null 2>&1 || FEHLT="$FEHLT validate_token"
+jq -e 'select(.pfad == "/rest/v1/oauth_clients" and .methode == "POST")' "$LOG" >/dev/null 2>&1 || FEHLT="$FEHLT client-insert"
+[ -z "$FEHLT" ] \
+  && ok "Client-Lookup, Code-Insert, validate_token und Client-Insert kamen im Lauf vor" \
+  || ko "nicht vorgekommen:$FEHLT (§18a a)"
 
 SCHREIB=$(jq -r 'select(.methode == "PATCH" or .methode == "DELETE" or (.methode == "POST" and .pfad == "/rest/v1/oauth_tokens")) | .methode' "$LOG" | sort -u | tr '\n' ' ')
 case "$SCHREIB" in
