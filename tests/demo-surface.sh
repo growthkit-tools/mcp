@@ -57,13 +57,56 @@ done
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 # ═════════════════════════════════════════════════════════════════════════════
+sec "0 · Der Client des Directory-Shims ist registriert"
+
+# Der Shim meldet sich mit einer FESTEN client_id und redirect_uri an
+# (mcp-directory-shim/src/upstream.ts). Stehen die nicht genau so in
+# oauth_clients, bekommt er in Produktion keine Session mehr — und das faellt
+# sonst erst dort auf. Gelesen wird aus dem Quelltext des Shims, nicht aus einer
+# Kopie hier (§7a). GET /authorize zeigt nur die Consent-Seite: schreibfrei.
+SHIM_SRC="$REPO_ROOT/mcp-directory-shim/src/upstream.ts"
+SHIM_ID=$(sed -n 's/^const CLIENT_ID = "\([^"]*\)";.*/\1/p' "$SHIM_SRC" 2>/dev/null | head -1)
+SHIM_RED=$(sed -n 's/^const REDIRECT_URI = "\([^"]*\)";.*/\1/p' "$SHIM_SRC" 2>/dev/null | head -1)
+if [ -z "$SHIM_ID" ] || [ -z "$SHIM_RED" ]; then
+  # §18a c: eine fehlende Quelle ist ein Befund, kein leerer Vergleich.
+  ko "CLIENT_ID/REDIRECT_URI nicht aus $SHIM_SRC lesbar — die Pruefung darunter haette nichts gemessen"
+else
+  C=$(curl -s -m 25 -o "$TMP/shim.html" -D "$TMP/shim.hdr" -w '%{http_code}' -G "$BASE/authorize" \
+    --data-urlencode "response_type=code" --data-urlencode "client_id=$SHIM_ID" \
+    --data-urlencode "redirect_uri=$SHIM_RED" --data-urlencode "code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+    --data-urlencode "code_challenge_method=S256")
+  GRUND=$(grep -i '^x-gk-oauth-error:' "$TMP/shim.hdr" | tr -d '\r' | sed 's/^[^:]*: *//')
+  { [ "$C" = 200 ] && grep -q '<form' "$TMP/shim.html"; } \
+    && ok "Shim-Client $SHIM_ID mit $SHIM_RED ist registriert (Consent-Seite, 200)" \
+    || ko "Shim-Client nicht angenommen: HTTP $C, Grund '${GRUND:-}' — der Shim bekaeme keine Session"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 sec "A · Demo-Session holen (derselbe Weg wie der Directory-Shim)"
 
+# ⚠️ BEWUSSTE AUSNAHME: DIESE SUITE SCHREIBT GEGEN DIE PREVIEW. Sie legt dort
+# einen Demo-Code und ein Demo-Token an — in der echten Supabase, denn die
+# Preview teilt Bindings und Secrets mit Production. Das gilt NUR fuer den
+# demo=1-Pfad und ist entschieden (29.09.2026): der Aufruf ist Zeichen fuer
+# Zeichen derselbe, den der Directory-Shim im Produktionsbetrieb faehrt, also
+# kein Verkehr, den es ohne diese Suite nicht gaebe. Fuer jeden anderen Pfad
+# gilt weiter "Probes duerfen nur lesen".
+#
+# Der Client ist ein REGISTRIERTER, eigens fuer diese Suite: /authorize nimmt
+# seit #61 nur registrierte Clients mit exakt registrierter redirect_uri an und
+# verlangt PKCE mit S256. Die client_id ist kein Geheimnis. Die Zeile in
+# oauth_clients wird von Hand angelegt, nicht von dieser Suite — ein
+# erfolgreiches /register gegen die Preview waere ein weiterer Schreibzugriff.
+CLIENT_ID="2190f99b-7092-4ee6-a904-40412da6e72b"
 RED="http://localhost/demo-surface-callback"
+VERIFIER=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')
+CHALLENGE=$(python3 -c 'import base64, hashlib, sys; print(base64.urlsafe_b64encode(hashlib.sha256(sys.argv[1].encode()).digest()).rstrip(b"=").decode())' "$VERIFIER")
 LOC=$(curl -s -m 25 -o /dev/null -D - -X POST "$BASE/authorize" \
-  --data-urlencode "client_id=demo-surface-test" \
+  --data-urlencode "client_id=$CLIENT_ID" \
   --data-urlencode "redirect_uri=$RED" \
   --data-urlencode "response_type=code" \
+  --data-urlencode "code_challenge=$CHALLENGE" \
+  --data-urlencode "code_challenge_method=S256" \
   --data-urlencode "demo=1" | tr -d '\r' | awk '/^[Ll]ocation:/ {print $2}')
 CODE=$(printf '%s' "$LOC" | sed -n 's/.*[?&]code=\([^&]*\).*/\1/p')
 if [ -n "$CODE" ]; then
@@ -75,7 +118,8 @@ fi
 
 TOK=$(curl -s -m 25 -X POST "$BASE/token" -H 'content-type: application/x-www-form-urlencoded' \
   --data-urlencode "grant_type=authorization_code" --data-urlencode "code=$CODE" \
-  --data-urlencode "client_id=demo-surface-test" --data-urlencode "redirect_uri=$RED" \
+  --data-urlencode "client_id=$CLIENT_ID" --data-urlencode "redirect_uri=$RED" \
+  --data-urlencode "code_verifier=$VERIFIER" \
   | jq -r '.access_token // empty')
 if [ -n "$TOK" ]; then
   ok "/token tauscht den Code gegen ein Access-Token"

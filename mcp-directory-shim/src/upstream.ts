@@ -20,10 +20,15 @@
 
 const upstreamBase = process.env.GK_UPSTREAM_URL ?? "https://mcp.growthkit.tools";
 
-// The Worker's /authorize + /token do not require pre-registered clients today
-// (client_id is only checked for presence). If that is ever hardened, add a
-// one-time Dynamic Client Registration call to POST /register here.
-const CLIENT_ID = "growthkit-directory-shim";
+// The Worker's /authorize and /token accept only registered clients (since the
+// OAuth hardening, #61): client_id must exist in oauth_clients, redirect_uri
+// must match one of its registered redirect_uris exactly, and PKCE with S256
+// is required. This client is registered once, by hand, as a fixed row — not
+// via Dynamic Client Registration at startup, which would create a row per
+// cold start and run into the per-IP registration limit. A client_id is not a
+// secret. If this value or REDIRECT_URI changes, the oauth_clients row must be
+// changed first, or every session mint fails with invalid_client.
+const CLIENT_ID = "40ae85c2-f6ab-4346-9587-d2f7d886509a";
 const REDIRECT_URI = "http://localhost/shim-callback"; // never listened on — we parse the 302 Location
 
 const REFRESH_MARGIN_MS = 2 * 60 * 1000; // refresh when <2min of the 1h TTL remain
@@ -60,7 +65,7 @@ async function cacheKey(gkToken: string | null): Promise<string> {
 }
 
 async function oauthDance(gkToken: string | null): Promise<TokenSet> {
-  // PKCE (S256) — optional upstream, verified when a challenge is present.
+  // PKCE (S256) — required upstream.
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
   const challenge = b64url(await sha256Bytes(verifier));
 
@@ -123,7 +128,8 @@ async function refresh(set: TokenSet): Promise<TokenSet | null> {
     const res = await fetch(`${upstreamBase}/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: set.refreshToken }).toString(),
+      // client_id goes along: the Worker checks it against the token's client.
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: set.refreshToken, client_id: CLIENT_ID }).toString(),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { access_token?: string; expires_in?: number };
