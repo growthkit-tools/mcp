@@ -31,7 +31,10 @@
       "Bash(wrangler deploy:*)",
       "Bash(wrangler publish:*)",
       "Bash(npx wrangler deploy:*)",
-      "Bash(npx wrangler publish:*)"
+      "Bash(npx wrangler publish:*)",
+      "Bash(gh secret:*)",
+      "Bash(gh variable:*)",
+      "Bash(gh api:*)"
     ],
 
     "//readNote": "Read(//home/coder/projects/**) ist eine bewusste Entscheidung, keine weggeklickte Regel: die Nachbar-Repos sind Lesereferenz. chrome-extension ist laut AGENTS.md §16 die visuelle Source of Truth fuer die vc-*-Klassen und Design-Tokens; supabase haelt die Edge-Function-Contracts, gegen die der Worker geprueft wird (get-seo-history, n8n-embed, weekly-seo-report). Beide sind read-only Referenz — §17 verbietet das Editieren der Extension ausdruecklich.",
