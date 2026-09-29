@@ -480,7 +480,10 @@ else
   # Existenz. Die Ignore-Zeile und diese Assertion gehoeren in denselben Commit:
   # ein Fenster, in dem die Regel ungeschuetzt ist, waere genau die Regression,
   # gegen die die Positivliste da ist.
-  MUST_IGNORE=".wrangler/state node_modules/pkg/index.js .dev.vars .env key.pem specs/x.md scratchpad/x .gk-ci-token"
+  # AGENTS.private.md: die Betriebs- und Auth-Interna zu AGENTS.md. Wie bei
+  # .gk-ci-token prueft das die REGEL, nicht die Datei — sie existiert nur
+  # lokal.
+  MUST_IGNORE=".wrangler/state node_modules/pkg/index.js .dev.vars .env key.pem specs/x.md scratchpad/x .gk-ci-token AGENTS.private.md"
   MUST_TRACK="index.js AGENTS.md wrangler.toml tests/source-invariants.sh"
 
   NOT_IGNORED=""

@@ -15,6 +15,14 @@ mcp-publisher
 mcp-publisher_*.tar.gz
 specs/
 
+# Betriebs- und Auth-Interna, die in einem oeffentlichen Repo nicht stehen
+# sollen (Rollenaufloesung im Detail, bewusst offene Haertungen, welche
+# Credentials auf welcher Maschine welche Rechte haben). AGENTS.md importiert
+# die Datei, wenn sie da ist; eingecheckt wird sie nie. Diese Zeile steht in der
+# MUST_IGNORE-Liste von tests/source-invariants.sh — entfernt sie jemand, wird
+# der unit-Job rot.
+AGENTS.private.md
+
 # Local secrets (never commit — this repo is public)
 .dev.vars
 .dev.vars.*
