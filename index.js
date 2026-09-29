@@ -330,16 +330,24 @@ function sbHeaders(env, extra = {}) {
 
 // ── MCP-Client-Erkennung aus redirect_uri ──────────────────────────────
 // Nur der Client ist aus dem OAuth-Request ableitbar (nicht das Directory).
-// Substring-Match auf der ganzen URI, robust auch für custom schemes (cursor://, claude://).
+// ⚠️ NACH HOSTNAME, NICHT NACH TEILSTRING. Das Label steht in der Ueberschrift
+// der Consent-Seite; es darf nur dann "Claude" sagen, wenn die Weiterleitung
+// auch dorthin geht. Ein Teilstring der ganzen URI traf jeden Pfad, der den
+// Namen enthaelt. Custom Schemes zaehlen nach dem Scheme selbst. Die
+// Rueckgabewerte bleiben dieselben — sie werden als mcp_client in oauth_codes
+// und oauth_tokens weitergeschrieben.
 function detectMcpClient(redirectUri) {
-  const u = String(redirectUri || "").toLowerCase();
-  if (!u) return "other";
-  if (u.includes("claude.ai") || u.includes("claude://") || u.includes("anthropic")) return "claude";
-  if (u.includes("chatgpt.com") || u.includes("openai.com") || u.includes("chatgpt://")) return "chatgpt";
-  if (u.includes("cursor")) return "cursor";
-  if (u.includes("cline")) return "cline";
-  if (u.includes("vscode") || u.includes("visualstudio")) return "vscode";
-  if (u.includes("localhost") || u.includes("127.0.0.1")) return "inspector";
+  let u;
+  try { u = new URL(String(redirectUri || "")); } catch { return "other"; }
+  if (u.protocol === "cursor:") return "cursor";
+  if (u.protocol === "vscode:" || u.protocol === "vscode-insiders:") return "vscode";
+  if (u.protocol === "claude:") return "claude";
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "other";
+  const host = u.hostname.toLowerCase();
+  const ist = (d) => host === d || host.endsWith("." + d);
+  if (ist("claude.ai") || ist("claude.com")) return "claude";
+  if (ist("chatgpt.com") || ist("openai.com")) return "chatgpt";
+  if (host === "localhost" || host === "127.0.0.1") return "inspector";
   return "other";
 }
 
@@ -352,6 +360,133 @@ const MCP_CLIENT_LABELS = {
   inspector: "the MCP Inspector",
   other: "your AI client",
 };
+
+// ── OAuth: Client-Bindung, PKCE, Registrierungs-Metadaten ──────────────
+// /authorize nimmt nur registrierte Clients an, und die redirect_uri muss
+// EXAKT einer ihrer registrierten redirect_uris entsprechen — kein Praefix,
+// keine Normalisierung (RFC 6749 §3.1.2.3). Scheitert eine Pruefung, gibt es
+// eine Fehlerseite und NIE eine Weiterleitung (RFC 6749 §4.1.2.1). PKCE mit
+// S256 ist Pflicht.
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Nur diese Parameter wandern in die Hidden-Fields und den Wiederholungslink.
+const ALLOWED_AUTHORIZE_PARAMS = ["response_type", "client_id", "redirect_uri", "state", "scope", "code_challenge", "code_challenge_method", "resource"];
+
+const OAUTH_CLIENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Laedt einen registrierten Client. Nur UUID-Form wird ueberhaupt
+// nachgeschlagen — alles andere ist ohne Backend-Aufruf unbekannt.
+// client_id ist kein Geheimnis und darf im Query-String stehen; die
+// Transportregel aus supabase#124 gilt Codes und Tokens.
+// Fail-closed: jeder Fehler ergibt null, also "unbekannter Client".
+async function loadClient(env, clientId) {
+  if (!OAUTH_CLIENT_ID_RE.test(String(clientId || ""))) return null;
+  try {
+    const r = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/oauth_clients?client_id=eq.${encodeURIComponent(clientId)}&select=client_id,client_name,redirect_uris`,
+      { headers: sbHeaders(env) },
+    );
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+function redirectAllowed(client, uri) {
+  return !!client && Array.isArray(client.redirect_uris) && client.redirect_uris.includes(uri);
+}
+
+function redirectHost(uri) {
+  try { return new URL(String(uri || "")).host; } catch { return ""; }
+}
+
+// Fehlerseite fuer /authorize. Leitet NIE weiter. `x-gk-oauth-error` traegt
+// den Grund maschinenlesbar (tests/oauth-transport.sh, tests/auth-paths.sh).
+function errorPage(status, code, msg) {
+  return new Response(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GrowthKit — authorization error</title></head><body style="font-family:system-ui,sans-serif;max-width:420px;margin:48px auto;padding:0 16px;color:#2a1438"><h1 style="font-size:18px">Authorization not possible</h1><p>${escapeHtml(msg)}</p></body></html>`,
+    { status, headers: { "Content-Type": "text/html; charset=utf-8", "x-gk-oauth-error": code } },
+  );
+}
+
+// Die Pruefungen, die GET und POST /authorize teilen. Erst die Form der
+// Anfrage — ohne Backend-Aufruf —, dann Client und redirect_uri.
+async function pruefeAuthorize(env, p) {
+  if (p.response_type !== "code") {
+    return { status: 400, code: "invalid_request", msg: "Only response_type=code is supported." };
+  }
+  if (!p.code_challenge || p.code_challenge_method !== "S256") {
+    return { status: 400, code: "invalid_request", msg: "PKCE with code_challenge_method=S256 is required." };
+  }
+  const client = await loadClient(env, p.client_id);
+  if (!client) return { status: 400, code: "invalid_client", msg: "Unknown client." };
+  if (!redirectAllowed(client, p.redirect_uri)) {
+    return { status: 400, code: "invalid_redirect_uri", msg: "The redirect_uri is not registered for this client." };
+  }
+  return { client };
+}
+
+function logAuthorizeAbgelehnt(pruefung, p) {
+  console.log(`[authorize] rejected reason=${pruefung.code} client_id=${String(p.client_id || "").slice(0, 64)} redirect_host=${redirectHost(p.redirect_uri)}`);
+}
+
+// /register: redirect_uris muessen plausibel sein. https immer, http nur auf
+// dem eigenen Rechner, Custom Schemes nur aus dieser Liste; kein Fragment.
+const REGISTER_CUSTOM_SCHEMES = ["cursor:", "vscode:", "vscode-insiders:", "claude:"];
+function pruefeRedirectUris(uris) {
+  if (!Array.isArray(uris) || uris.length === 0) return "redirect_uris must be a non-empty array.";
+  if (uris.length > 10) return "At most 10 redirect_uris are allowed.";
+  for (const roh of uris) {
+    if (typeof roh !== "string" || roh.length > 2000) return "Each redirect_uri must be a string of at most 2000 characters.";
+    let u;
+    try { u = new URL(roh); } catch { return "Each redirect_uri must be an absolute URL."; }
+    if (roh.includes("#")) return "A redirect_uri must not contain a fragment.";
+    if (u.protocol === "https:") continue;
+    if (u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) continue;
+    if (REGISTER_CUSTOM_SCHEMES.includes(u.protocol)) continue;
+    return "redirect_uri scheme is not allowed.";
+  }
+  return null;
+}
+
+// Steuerzeichen (C0, DEL, C1) raus, dann auf 100 Zeichen kuerzen — gezaehlt
+// in Code-Points, damit kein Surrogatpaar halbiert wird. Ueber Code-Points
+// statt Regex: deno lint (no-control-regex) laesst eine Zeichenklasse aus
+// Steuerzeichen nicht zu, und der Schuldschein darf nicht wachsen.
+function bereinigeClientName(n) {
+  if (typeof n !== "string") return "";
+  const zeichen = [...n].filter((z) => {
+    const c = z.codePointAt(0);
+    return !(c < 0x20 || (c >= 0x7f && c <= 0x9f));
+  });
+  return zeichen.slice(0, 100).join("");
+}
+
+// Registrierungen pro IP und Stunde, im selben KV wie das Demo-Limit.
+// Fail-open wie dort: fehlt KV oder wirft es, laeuft die Registrierung.
+// Gezaehlt wird erst NACH der Metadaten-Pruefung — abgelehnte Anfragen
+// schreiben nichts, auch nicht ins KV.
+const REGISTER_RL_LIMIT = 20;
+async function registrierungErlaubt(env, request) {
+  if (!env.DEMO_RL) return true;
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const key = `reg:${ip}:${Math.floor(Date.now() / 3600000)}`;
+  try {
+    const cur = parseInt((await env.DEMO_RL.get(key)) || "0", 10);
+    if (cur >= REGISTER_RL_LIMIT) return false;
+    await env.DEMO_RL.put(key, String(cur + 1), { expirationTtl: 7200 });
+    return true;
+  } catch (e) {
+    console.error("register rate-limit KV error (failing open):", e);
+    return true;
+  }
+}
 
 // ── Demo-Rate-Limit (Cloudflare KV, per IP, per Minute) ────────────────
 // Nur für Demo-Sessions. Fail-OPEN: KV fehlt/fehlerhaft → Demo läuft weiter
@@ -4740,7 +4875,7 @@ if (name === "getChapterOverview") {
         response_types_supported: ["code"],
         response_modes_supported: ["query"],
         grant_types_supported: ["authorization_code", "refresh_token"],
-        code_challenge_methods_supported: ["S256", "plain"],
+        code_challenge_methods_supported: ["S256"],
         scopes_supported: ["mcp:read", "mcp:write"],
         token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
         service_documentation: "https://modelcontextprotocol.io",
@@ -4761,8 +4896,20 @@ if (name === "getChapterOverview") {
     // Dynamic Client Registration
     // =========================================================
     if (request.method === "POST" && url.pathname === "/register") {
-      const body = await request.json();
-      const { redirect_uris, grant_types, response_types, client_name, scope, token_endpoint_auth_method } = body;
+      // Der Endpunkt bleibt offen (MCP-Standard: Clients registrieren sich
+      // selbst). Geprueft wird, dass die Metadaten plausibel sind — bei einem
+      // Verstoss 400 OHNE Insert und ohne Eintrag ins Rate-Limit.
+      let body;
+      try { body = await request.json(); } catch { return json({ error: "invalid_client_metadata", error_description: "Body must be JSON." }, 400); }
+      if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "invalid_client_metadata" }, 400);
+      const { redirect_uris, grant_types, response_types, scope, token_endpoint_auth_method } = body;
+      const uriFehler = pruefeRedirectUris(redirect_uris);
+      if (uriFehler) return json({ error: "invalid_redirect_uri", error_description: uriFehler }, 400);
+      if (token_endpoint_auth_method !== undefined && !["none", "client_secret_post", "client_secret_basic"].includes(token_endpoint_auth_method)) {
+        return json({ error: "invalid_client_metadata", error_description: "Unsupported token_endpoint_auth_method." }, 400);
+      }
+      if (!(await registrierungErlaubt(env, request))) return json({ error: "too_many_requests" }, 429);
+      const client_name = bereinigeClientName(body.client_name);
       const client_id = crypto.randomUUID();
       const client_secret = token_endpoint_auth_method === "none" ? undefined : crypto.randomUUID();
       const clientData = {
@@ -4786,13 +4933,26 @@ if (name === "getChapterOverview") {
     // =========================================================
     if (request.method === "GET" && url.pathname === "/authorize") {
       const params = Object.fromEntries(url.searchParams.entries());
+      const pruefung = await pruefeAuthorize(env, params);
+      if (!pruefung.client) {
+        logAuthorizeAbgelehnt(pruefung, params);
+        return errorPage(pruefung.status, pruefung.code, pruefung.msg);
+      }
       const mcpClient = detectMcpClient(url.searchParams.get("redirect_uri"));
       const clientLabel = MCP_CLIENT_LABELS[mcpClient] || "your AI client";
       const lang = (request.headers.get("accept-language") || "").toLowerCase().startsWith("de") ? "de" : "en";
       const pricingUrl = `https://growthkit.tools/${lang}/pricing?utm_source=${encodeURIComponent(mcpClient)}&utm_medium=mcp_oauth&utm_campaign=authorize_screen`;
       console.log(`[authorize] client=${mcpClient} lang=${lang} redirect_uri=${url.searchParams.get("redirect_uri") || ""}`);
+      // Wohin weitergeleitet wird, steht als eigene Zeile. client_name waehlt
+      // der Client selbst — er erscheint deshalb nur als Selbstauskunft und
+      // nie in der Ueberschrift.
+      const zielHost = escapeHtml(redirectHost(params.redirect_uri));
+      const clientName = escapeHtml(pruefung.client.client_name || "");
+      const zielZeile = lang === "de"
+        ? `Weiterleitung an: <strong>${zielHost}</strong>${clientName ? `<br>Die Anwendung meldet sich als „${clientName}“.` : ""}`
+        : `Redirects to: <strong>${zielHost}</strong>${clientName ? `<br>The application identifies itself as “${clientName}”.` : ""}`;
       return new Response(
-        `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect to GrowthKit</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><style>@font-face{font-family:'Inter';font-weight:400;font-display:swap;src:url('https://growthkit.tools/fonts/inter-400-latin.woff2') format('woff2')}@font-face{font-family:'Inter';font-weight:500;font-display:swap;src:url('https://growthkit.tools/fonts/inter-500-latin.woff2') format('woff2')}@font-face{font-family:'Inter';font-weight:600;font-display:swap;src:url('https://growthkit.tools/fonts/inter-600-latin.woff2') format('woff2')}@font-face{font-family:'Montserrat';font-weight:700;font-display:swap;src:url('https://growthkit.tools/fonts/montserrat-700-latin.woff2') format('woff2')}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:hsl(270 40% 97%)}.card{width:100%;max-width:382px;background:#fff;border:1px solid #E6E1ED;border-radius:16px;padding:30px 28px}.brand{display:flex;align-items:center;gap:11px;margin-bottom:18px}.brand img{width:42px;height:42px;border-radius:11px;display:block}.brand span{font-family:'Montserrat',system-ui,sans-serif;font-weight:700;font-size:25px;letter-spacing:-0.02em;color:hsl(270 53% 12%)}.sub{font-size:14px;color:hsl(280 46% 17%);margin:0 0 22px;line-height:1.4}.lbl{font-size:13px;font-weight:500;color:hsl(280 46% 17%);margin-bottom:7px}input[name=user_token]{width:100%;height:44px;border:1px solid #DED7E8;border-radius:8px;padding:0 13px;font-size:14px;font-family:inherit;color:hsl(270 53% 12%);outline:none;margin-bottom:16px}input[name=user_token]:focus{border-color:hsl(79 100% 50%);box-shadow:0 0 0 3px hsl(79 100% 50% / .25)}button{width:100%;height:46px;border-radius:8px;font-size:15px;cursor:pointer;font-family:'Montserrat',system-ui,sans-serif;font-weight:700}.btn-primary{background:hsl(79 100% 50%);color:hsl(270 53% 12%);border:none;margin-bottom:10px}.btn-demo{background:#fff;color:hsl(280 46% 17%);border:1px solid #DED7E8;font-family:'Inter',sans-serif;font-weight:600}.hint{font-size:12px;color:#8B8398;text-align:center;line-height:1.55;margin:18px 6px 0}.signup{font-size:13px;color:hsl(280 46% 17%);text-align:center;margin:14px 0 0;border-top:1px solid #EFEBF4;padding-top:14px}.signup a{color:hsl(270 53% 12%);font-weight:600;text-decoration:none}#errorMsg{display:none;color:hsl(0 84% 45%);font-size:13px;margin-bottom:10px}</style></head><body><div class="card"><div class="brand"><img src="/favicon.svg" alt="GrowthKit"><span>GrowthKit</span></div><p class="sub">Connect ${clientLabel} to GrowthKit MCP</p><form id="authForm" method="POST" action="/authorize">${Object.entries(params).map(([k, v]) => `<input type="hidden" name="${k}" value="${v.replace(/"/g, "&quot;")}" />`).join("")}<div class="lbl">Your GrowthKit token</div><input id="user_token" name="user_token" placeholder="gk_…" autocomplete="off"><div id="errorMsg">Please enter a valid token (starts with gk_).</div><button type="submit" class="btn-primary">Authorize</button><button type="submit" name="demo" value="1" formnovalidate class="btn-demo">Try the demo (no token)</button></form><p class="hint">Your token identifies your GrowthKit workspace. The demo connects a read-only sample workspace — no signup needed.</p><p class="signup">New to GrowthKit? <a href="${pricingUrl}">See plans &amp; pricing &rarr;</a></p></div><script>document.getElementById("authForm").addEventListener("submit",function(e){if(e.submitter&&e.submitter.name==="demo")return;var t=document.getElementById("user_token").value.trim();if(!t.startsWith("gk_")){e.preventDefault();document.getElementById("errorMsg").style.display="block"}});</script></body></html>`,
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect to GrowthKit</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><style>@font-face{font-family:'Inter';font-weight:400;font-display:swap;src:url('https://growthkit.tools/fonts/inter-400-latin.woff2') format('woff2')}@font-face{font-family:'Inter';font-weight:500;font-display:swap;src:url('https://growthkit.tools/fonts/inter-500-latin.woff2') format('woff2')}@font-face{font-family:'Inter';font-weight:600;font-display:swap;src:url('https://growthkit.tools/fonts/inter-600-latin.woff2') format('woff2')}@font-face{font-family:'Montserrat';font-weight:700;font-display:swap;src:url('https://growthkit.tools/fonts/montserrat-700-latin.woff2') format('woff2')}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:hsl(270 40% 97%)}.card{width:100%;max-width:382px;background:#fff;border:1px solid #E6E1ED;border-radius:16px;padding:30px 28px}.brand{display:flex;align-items:center;gap:11px;margin-bottom:18px}.brand img{width:42px;height:42px;border-radius:11px;display:block}.brand span{font-family:'Montserrat',system-ui,sans-serif;font-weight:700;font-size:25px;letter-spacing:-0.02em;color:hsl(270 53% 12%)}.sub{font-size:14px;color:hsl(280 46% 17%);margin:0 0 22px;line-height:1.4}.dest{font-size:13px;color:hsl(280 46% 17%);margin:-12px 0 20px;line-height:1.45;overflow-wrap:anywhere}.lbl{font-size:13px;font-weight:500;color:hsl(280 46% 17%);margin-bottom:7px}input[name=user_token]{width:100%;height:44px;border:1px solid #DED7E8;border-radius:8px;padding:0 13px;font-size:14px;font-family:inherit;color:hsl(270 53% 12%);outline:none;margin-bottom:16px}input[name=user_token]:focus{border-color:hsl(79 100% 50%);box-shadow:0 0 0 3px hsl(79 100% 50% / .25)}button{width:100%;height:46px;border-radius:8px;font-size:15px;cursor:pointer;font-family:'Montserrat',system-ui,sans-serif;font-weight:700}.btn-primary{background:hsl(79 100% 50%);color:hsl(270 53% 12%);border:none;margin-bottom:10px}.btn-demo{background:#fff;color:hsl(280 46% 17%);border:1px solid #DED7E8;font-family:'Inter',sans-serif;font-weight:600}.hint{font-size:12px;color:#8B8398;text-align:center;line-height:1.55;margin:18px 6px 0}.signup{font-size:13px;color:hsl(280 46% 17%);text-align:center;margin:14px 0 0;border-top:1px solid #EFEBF4;padding-top:14px}.signup a{color:hsl(270 53% 12%);font-weight:600;text-decoration:none}#errorMsg{display:none;color:hsl(0 84% 45%);font-size:13px;margin-bottom:10px}</style></head><body><div class="card"><div class="brand"><img src="/favicon.svg" alt="GrowthKit"><span>GrowthKit</span></div><p class="sub">Connect ${escapeHtml(clientLabel)} to GrowthKit MCP</p><p class="dest">${zielZeile}</p><form id="authForm" method="POST" action="/authorize">${ALLOWED_AUTHORIZE_PARAMS.filter((k) => params[k] !== undefined).map((k) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(params[k])}" />`).join("")}<div class="lbl">Your GrowthKit token</div><input id="user_token" name="user_token" placeholder="gk_…" autocomplete="off"><div id="errorMsg">Please enter a valid token (starts with gk_).</div><button type="submit" class="btn-primary">Authorize</button><button type="submit" name="demo" value="1" formnovalidate class="btn-demo">Try the demo (no token)</button></form><p class="hint">Your token identifies your GrowthKit workspace. The demo connects a read-only sample workspace — no signup needed.</p><p class="signup">New to GrowthKit? <a href="${pricingUrl}">See plans &amp; pricing &rarr;</a></p></div><script>document.getElementById("authForm").addEventListener("submit",function(e){if(e.submitter&&e.submitter.name==="demo")return;var t=document.getElementById("user_token").value.trim();if(!t.startsWith("gk_")){e.preventDefault();document.getElementById("errorMsg").style.display="block"}});</script></body></html>`,
         { headers: { "Content-Type": "text/html", ...CORS_HEADERS } }
       );
     }
@@ -4803,11 +4963,17 @@ if (name === "getChapterOverview") {
     if (request.method === "POST" && url.pathname === "/authorize") {
       const formData = await request.text();
       const body = Object.fromEntries(new URLSearchParams(formData));
-      const { response_type, client_id, redirect_uri, state, scope, code_challenge, code_challenge_method, user_token } = body;
+      const { client_id, redirect_uri, state, scope, code_challenge, code_challenge_method, resource, user_token } = body;
       const isDemo = body.demo === "1" || body.demo === 1;
 
-      if (response_type !== "code") return json({ error: "unsupported_response_type" }, 400);
-      if (!client_id || !redirect_uri) return json({ error: "invalid_request" }, 400);
+      // Dieselben Pruefungen wie beim GET, noch einmal: die Formularfelder
+      // kommen vom Browser und sind Eingaben, nicht die Werte, die der GET
+      // geprueft hat.
+      const pruefung = await pruefeAuthorize(env, body);
+      if (!pruefung.client) {
+        logAuthorizeAbgelehnt(pruefung, body);
+        return errorPage(pruefung.status, pruefung.code, pruefung.msg);
+      }
 
       // Resolve the effective gk_ token. For the demo path it comes from the
       // server-side secret and is NEVER echoed to the browser.
@@ -4818,8 +4984,8 @@ if (name === "getChapterOverview") {
         } else {
         if (!user_token || !user_token.startsWith("gk_")) {
           const retryUrl = new URL(BASE_URL + "/authorize");
-          for (const [k, v] of Object.entries(body)) { if (k !== "user_token") retryUrl.searchParams.set(k, v); }
-          return new Response(`<html><body><p>Invalid token. <a href="${retryUrl}">Try again</a>.</p></body></html>`, { status: 400, headers: { "Content-Type": "text/html" } });
+          for (const k of ALLOWED_AUTHORIZE_PARAMS) { if (body[k] !== undefined) retryUrl.searchParams.set(k, body[k]); }
+          return new Response(`<html><body><p>Invalid token. <a href="${escapeHtml(retryUrl.toString())}">Try again</a>.</p></body></html>`, { status: 400, headers: { "Content-Type": "text/html" } });
         }
         effectiveUserToken = user_token;
         try {
@@ -4832,7 +4998,9 @@ if (name === "getChapterOverview") {
           const validationData = await validationResponse.json();
           if (!validationData.valid) return new Response("<html><body><p>Invalid token.</p></body></html>", { status: 401, headers: { "Content-Type": "text/html" } });
         } catch (e) {
+          // Fail-closed: ohne gepruefte Antwort gibt es keinen Code.
           console.error("Token validation error:", e);
+          return errorPage(503, "temporarily_unavailable", "The token check is temporarily unavailable. Please try again in a moment.");
         }
       }
 
@@ -4840,7 +5008,6 @@ if (name === "getChapterOverview") {
         const scopes = scope.split(" ");
         if (!scopes.every(s => ["mcp:read", "mcp:write"].includes(s))) return json({ error: "invalid_scope" }, 400);
       }
-      if (code_challenge_method && code_challenge_method !== "S256" && code_challenge_method !== "plain") return json({ error: "invalid_request" }, 400);
 
       // Client/Lang server-side ableiten (POST-Scope hat kein url-Objekt).
       const postClient = detectMcpClient(redirect_uri);
@@ -4850,7 +5017,7 @@ if (name === "getChapterOverview") {
       await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes`, {
         method: "POST",
         headers: sbHeaders(env, { "Content-Type": "application/json", Prefer: "return=minimal" }),
-        body: JSON.stringify({ code, client_id, redirect_uri, scope: isDemo ? "mcp:read" : (scope || "mcp:read mcp:write"), code_challenge: code_challenge || null, code_challenge_method: code_challenge_method || null, user_token: effectiveUserToken, expires_at: Date.now() + 10 * 60 * 1000, is_demo: isDemo, mcp_client: postClient, lang: postLang }),
+        body: JSON.stringify({ code, client_id, redirect_uri, scope: isDemo ? "mcp:read" : (scope || "mcp:read mcp:write"), code_challenge: code_challenge || null, code_challenge_method: code_challenge_method || null, resource: resource || null, user_token: effectiveUserToken, expires_at: Date.now() + 10 * 60 * 1000, is_demo: isDemo, mcp_client: postClient, lang: postLang }),
       });
 
       const redirectUrl = new URL(redirect_uri);
@@ -4893,23 +5060,26 @@ if (name === "getChapterOverview") {
         if (!codeOk) return json({ error: "server_error" }, 500);
         if (!Array.isArray(rows) || !rows.length) return json({ error: "invalid_grant" }, 400);
         const stored = rows[0];
-        if (Number(stored.expires_at) < Date.now()) return json({ error: "invalid_grant" }, 400);
-        if (body.redirect_uri && stored.redirect_uri !== body.redirect_uri) return json({ error: "invalid_grant" }, 400);
 
-        if (stored.code_challenge && code_verifier) {
-          let computed;
-          if (stored.code_challenge_method === "S256") {
-            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
-            computed = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-          } else { computed = code_verifier; }
-          if (computed !== stored.code_challenge) return json({ error: "invalid_grant" }, 400);
-        }
-
+        // ⚠️ EIN CODE, EIN VERSUCH. Geloescht wird VOR den Pruefungen, nicht
+        // danach — auch ein fehlgeschlagener Einloeseversuch verbraucht den
+        // Code, sonst liesse er sich mit wechselnden Werten wiederholen.
         // Geloescht wird ueber den nicht-geheimen Handle aus DEMSELBEN Lookup
         // (oauth_codes.id, supabase#124) — nicht ueber den Code selbst.
         await fetch(`${env.SUPABASE_URL}/rest/v1/oauth_codes?id=eq.${stored.id}`, {
           method: "DELETE", headers: sbHeaders(env),
         });
+
+        if (Number(stored.expires_at) < Date.now()) return json({ error: "invalid_grant" }, 400);
+        // Der Code ist an den Client gebunden, der ihn angefordert hat, und an
+        // dessen redirect_uri. Beide sind Pflicht, nicht "falls mitgeschickt".
+        if (stored.client_id !== client_id) return json({ error: "invalid_grant" }, 400);
+        if (!body.redirect_uri || stored.redirect_uri !== body.redirect_uri) return json({ error: "invalid_grant" }, 400);
+        // PKCE ist Pflicht und nur als S256.
+        if (!code_verifier || !stored.code_challenge || stored.code_challenge_method !== "S256") return json({ error: "invalid_grant" }, 400);
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
+        const computed = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        if (computed !== stored.code_challenge) return json({ error: "invalid_grant" }, 400);
 
         const access_token = crypto.randomUUID();
         const refresh_token = crypto.randomUUID();
@@ -4936,6 +5106,11 @@ if (name === "getChapterOverview") {
         if (!Array.isArray(tokenRows) || !tokenRows.length) return json({ error: "invalid_grant" }, 400);
         const storedToken = tokenRows[0];
         if (Number(storedToken.refresh_expires_at) < Date.now()) return json({ error: "invalid_grant" }, 400);
+        // Der Refresh-Token gehoert dem Client, dem er ausgestellt wurde.
+        if (storedToken.client_id !== client_id) {
+          console.log(`[token] refresh rejected reason=${client_id ? "client_mismatch" : "client_missing"}`);
+          return json({ error: "invalid_grant" }, 400);
+        }
 
         const new_access_token = crypto.randomUUID();
         // Wie beim DELETE oben: geschrieben wird ueber oauth_tokens.id aus dem
