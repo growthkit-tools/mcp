@@ -632,6 +632,18 @@ T=$(tok --arg c "$CLIENT_OK" --arg code "$CODE_T4" --arg r "$REDIR_OK" --arg v "
 T=$(tok --arg r "$REF_OK" '{grant_type:"refresh_token", client_id:"fremder-client", refresh_token:$r}')
 [ "$(echo "$T" | jq -r '.error')" = "invalid_grant" ] && ok "R1 refresh mit anderer client_id -> invalid_grant" || ko "R1: $(echo "$T" | head -c 120)"
 
+# Refresh OHNE client_id bleibt erlaubt: ob Claude, ChatGPT und Desktop sie beim
+# Refresh mitschicken, ist nicht belegt, und eine Ablehnung hiesse fuer sie
+# stuendlich neu verbinden. Mitgeschickt muss sie passen (R1); fehlt sie, wird
+# es geloggt, damit sichtbar wird, WER sie nicht schickt.
+T=$(tok --arg r "$REF_OK" '{grant_type:"refresh_token", refresh_token:$r}')
+[ -n "$(echo "$T" | jq -r '.access_token // ""')" ] \
+  && ok "R2 refresh ohne client_id -> neuer access_token (erlaubt)" \
+  || ko "R2 refresh ohne client_id: $(echo "$T" | head -c 120)"
+grep -q 'refresh client_missing' "$FIX/wrangler.log" \
+  && ok "R2b der Refresh ohne client_id steht im Log (client_missing)" \
+  || ko "R2b kein 'refresh client_missing' im Worker-Log"
+
 # ═════════════════════════════════════════════════════════════════════════════
 sec "I · /register — nur plausible Metadaten, ohne Insert bei Verstoss"
 
