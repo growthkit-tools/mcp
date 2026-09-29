@@ -1,5 +1,10 @@
 # GrowthKit MCP Worker — Agent Quick Reference
 
+> **Zuerst lesen, falls vorhanden:** `AGENTS.private.md` (Repo-Root, gitignored).
+> Enthält Betriebs- und Auth-Interna, die in einem öffentlichen Repo nicht stehen.
+> Fehlt sie: nicht raten — bei Chris anfordern.
+@AGENTS.private.md
+
 > **Ablage:** Repo-Root als `AGENTS.md`. Danach `git rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md`
 > — eine Quelle, zwei Namen. Zwei getrennte Guide-Dateien driften auseinander.
 >
@@ -23,51 +28,7 @@ Cloudflare Worker, serviert den GrowthKit MCP-Server auf `mcp.growthkit.tools`.
 - Backend: Supabase-Projekt (EU Frankfurt) über Edge Functions,
   Custom Domain `api.growthkit.tools` proxied `/functions/v1/*`.
   Project-Ref steht in `wrangler.toml` / den Worker-Secrets, nicht hier.
-- Auth: **Zwei Auflösungswege, unterschieden allein am Token-Präfix** (`index.js` ~1321).
-  Die Entscheidung fällt vor jedem Backend-Aufruf.
-  - Bearer beginnt mit `gk_` → **direkter API-Token-Pfad**: `resolve_user_token` gegen
-    `user_api_tokens`; die RPC hasht selbst und prüft `is_active`. Kein OAuth, kein
-    Browser — das ist der Pfad für Tests, CI und Automatisierung. Zwei bewusste
-    Nicht-Handlungen: `last_used_at` bleibt **ungeschrieben** (`resolve_user_token`
-    schreibt nicht, das tut nur `use_api_token`), Tokens sehen über diesen Weg also
-    unbenutzt aus; und `isDemo` ist hier **immer `false`** — `user_api_tokens` hat kein
-    `is_demo`, Demo-Sessions laufen ausschließlich über OAuth.
-  - Alles andere → **OAuth-Pfad** wie bisher: gegen `oauth_tokens.access_token` mit
-    Ablaufprüfung; das `gk_`-Token liegt dort als `user_token`.
-
-  Beide Wege enden bei `userToken`; alles danach — Rollenableitung, Metering,
-  Tool-Dispatch — hängt nur noch daran. Beide antworten bei Misserfolg mit **derselben**
-  Meldung (`Invalid or expired token`) — Absicht, sie darf nicht verraten, ob ein Token
-  unbekannt oder deaktiviert ist. Damit ist die Meldung allein kein Beleg, welcher Zweig
-  lief; dafür gibt es den maschinenlesbaren Diskriminator `data.path`
-  (`api_token` | `oauth`), an dem `tests/auth-paths.sh` hängt.
-  *(Live verifiziert, 20.08.)*
-  — Nicht zu verwechseln mit dem **Query-Scoping** auf `to_token_hash`, siehe §14.
-    Das ist eine andere Aussage über eine andere Ebene und weiterhin gültig.
-
-- **Die Rolle kommt aus dem Präfix, nicht aus der Datenbank** (`index.js` ~1376):
-  `gk_team_` → `team`, `gk_view_` → `view`, **alles andere → `admin`**. Das Präfix kann
-  nur **herabstufen** — ein präfixloses `gk_`-Token bekommt die höchste Rolle.
-  Live belegt an einem Workspace: **68 Tools für `admin`, 63 für `gk_team_`** (die fünf
-  Differenzen sind die admin-only-destruktiven). Beide Tokens lösen auf **denselben
-  `user_id`** auf — **die Rolle unterscheidet sich, der Datenraum nicht.** Wer die
-  Rollenfilterung für eine Mandantengrenze hält, liegt falsch.
-  *(Live verifiziert, 20.08.)*
-  - **Betriebsregel: ein CI-/Testtoken wird bewusst als `gk_view_` angelegt.** Sonst
-    läuft der Runner mit `admin` — schreibend, auf echte Workspace-Daten, denn
-    Preview-Versionen nutzen dieselben Bindings und Secrets wie Production. Die Rolle
-    steckt im **Namen** des Tokens, nicht in einer Prüfung: im Workflow steht nur ein
-    Secret-Name, beim Review sieht man sie nicht. Sie muss beim **Anlegen** entschieden
-    werden. `gk_team_` wäre die Obergrenze, ein präfixloses Token nie.
-
-    Konkret statt „weniger": `gk_view_` sieht **30 von 68 Tools**. Davon sind **29
-    lesend — und eines nicht.** `setWorkingMemory` ist für `view` freigegeben, steht
-    nicht in `READ_ONLY_TOOLS` (wird also als Write gemetert) und ist als
-    `DESTRUCTIVE_TOOLS` klassifiziert; ein Handler-Guard fängt es nicht ab. Der
-    Working-Memory-Zustand ist session-lokal und bewusst für alle Rollen schreibbar —
-    aber **„`gk_view_` ist schreibfrei" ist damit falsch.** Für die CI-Pfade folgenlos
-    (`probe.sh`, `report-tools.sh`, `auth-paths.sh` rufen es nicht auf); als Zusage an
-    einen Token-Empfänger wäre es eine, die der Code nicht deckt.
+- Auth hat zwei Auflösungswege (gk_-API-Token, OAuth); Details in `AGENTS.private.md`.
 - Deploy: **automatisch bei Push** via Cloudflare Workers Builds (Git-Integration).
   Deploy-Command `npx wrangler deploy`, Version-Command `npx wrangler versions upload`.
   Es gibt **bewusst keine GitHub-Action** dafür — das ist kein Versäumnis, füge keine hinzu.
@@ -237,50 +198,6 @@ CI:              .github/workflows/ci.yml — testet und probt NUR, deployt nie
 **Kein Docker im Code-Server verfügbar** und nichts hier braucht welches. Wenn du auf ein
 Werkzeug stößt, das Docker voraussetzt: nicht umgehen, eskalieren.
 
-### Push, der `.github/workflows/**` anfasst
-
-**Seit dem 22.09.2026 braucht er keinen Umweg mehr — ein blanker `git push` trägt.**
-Der aktive `gh`-Account ist `growthkit-cc`, sein Token trägt
-`read:org, repo, workflow`; `~/.gitconfig` bindet `gh auth git-credential` an
-`https://github.com`, das Remote ist HTTPS. Belegt an PR #56: zwei Workflow-Dateien
-(`guard-merge.yml`, `ci.yml`), gepusht ohne jedes `-c`. Bis dahin stand hier, der Token
-trage **kein** `workflow` — das galt für den Account vom 24.08. und ist mit dem
-Account-Wechsel überholt, nicht vorher falsch gewesen.
-
-⚠️ **Die Scopes hängen am Account, nicht am Repo — vor dem Push nachsehen, nicht aus
-dieser Zeile zitieren:** `gh auth status` zeigt aktiven Account und `Token scopes`.
-Fehlt dort `workflow`, gilt der Rest dieses Abschnitts wieder.
-
-**Nur dann** braucht es das fine-grained PAT **und** einen Reset der Helper-Liste — aber
-auf **der Ebene, auf der sie eingetragen ist**:
-
-```bash
-git -c credential.helper= \
-    -c credential.https://github.com.helper= \
-    -c credential.https://github.com.helper=<pfad-zum-helfer-skript> \
-    push origin <branch>
-```
-
-⚠️ **Ein generisches `-c credential.helper=` allein reicht NICHT.** Genau das stand hier
-bis zum 20.09.2026, und es ist an dem Tag beim ersten Push mit einer Workflow-Datei
-durchgefallen. `~/.gitconfig` trägt den gh-Helper **URL-gebunden** ein
-(`credential.https://github.com.helper`, dazu `https://gist.github.com`); git führt die
-generische und die URL-gebundene Liste **getrennt**, und wer die eine leert, lässt die
-andere unberührt. Der Push lief deshalb weiter über `gh auth git-credential` und einen
-VS-Code-Askpass und endete in `remote: No anonymous write access` — **einer Meldung, die
-von Workflow-Rechten kein Wort sagt.** Wer sie für die erwartete Ablehnung hält, sucht am
-falschen Ort.
-
-⚠️ **Den Token über ein Helfer-Skript holen, nicht über `$(…)` im Kommando.** Das Skript
-gibt `username=x-access-token` und `password=<token>` aus und hält den Wert damit aus
-Kommandotext, Shell-Verlauf und Hook-Ereignis heraus. Es **braucht das Exec-Bit**: ohne
-meldet git nur `Permission denied` für den Helfer und fällt stumm auf die nächste Ebene
-zurück — dieselbe Fehlermeldung wie oben, wieder ohne den Grund zu nennen.
-
-*(Am 20.09.2026 so verifiziert: Push von `fix/oauth-transport` mit geänderter `ci.yml`
-ging durch. Das PAT trägt die Workflow-Berechtigung also; was es vorher nicht belegt,
-ist der Server — geprüft wird erst beim Push.)*
-
 ---
 
 ## Leitplanken (nicht verhandelbar)
@@ -390,8 +307,8 @@ sind Module-Level-Consts in `index.js`. **Beides** liest sie: die `initialize`-R
      fiele Richtiges. Stellen in dieser Datei, die ausdrücklich **bleiben** — die
      Aufzählung ist bewusst nicht abschließend, eine Anzahl wäre hier selbst eine
      abgeleitete Größe:
-     „68 Tools für `admin`, 63 für `gk_team_`" und „30 von 68 Tools, davon 29 lesend"
-     (beide *live verifiziert, 20.08.*) sowie „12 von 87" in §18a **(k)**
+     die Tool-Zahlen je Rolle in `AGENTS.private.md`
+     (*live verifiziert, 20.08.*) sowie „12 von 87" in §18a **(k)**
      (`growthkit-website`, 21.08.2026); dazu die Belegtabelle in **§17a** und die Zählung
      der Commit-Bodies in **§18b**. Diese Zahlen ergeben sich nicht — sie wurden
      **gemessen**.
@@ -941,14 +858,6 @@ braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den 
   **falsche** Description fängt der Golden Master nie. Dafür braucht es eine eigene
   Assertion (siehe `tests/report-tools.sh`). *(Beobachtet, 20.08.)*
 
-- **Rollen-Doppeldeutigkeit.** `user_api_tokens` hat eine `role`-Spalte, und **der Worker
-  liest sie nirgends** — die Rolle fällt allein aus dem Token-Präfix (siehe „Wissen").
-  Beide können sich also widersprechen, ohne dass es auffällt: Chris' Token ist
-  `gk_team_` bei `role='admin'` und wird als `team` behandelt. Wer die Spalte ändert,
-  ändert am Verhalten des Workers nichts. (`is_demo` sticht jedes Präfix und erzwingt
-  `demo` — aber nur auf dem OAuth-Pfad, der `gk_`-Pfad kennt kein `is_demo`.)
-  *(Beobachtet, 20.08.)*
-
 - **`probe.sh` zählt einen delegierten Aufruf als EINEN Eintrag.** Sektion H ruft
   `tests/source-invariants.sh --nested` auf; dessen Assertionszeilen werden gedruckt,
   aber im Kindprozess gezählt — der Elternzähler sieht sie nie. Die Summenzeile von
@@ -990,18 +899,6 @@ braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den 
   läuft**. Der Guard läuft deshalb ohne `if` auf jedem Bash-Aufruf und entscheidet
   selbst. *(Beobachtet, 20.08.)*
 
-- **`enforce_admins: false` macht Branch Protection für Admin-Credentials wirkungslos.**
-  Bis zum 20.08. galt die PR-Pflicht auf `main` für alle **außer Admins** — und die
-  Credentials auf dieser Maschine sind Admin. Ein direkter Push wäre durchgegangen; §3
-  hatte serverseitig **null** Durchsetzung. Steht jetzt auf `true`, bindet also auch
-  Chris. Die Regel dahinter ist dieselbe wie beim Cloudflare-Dashboard: **eine
-  Konfiguration, die nur in einer Weboberfläche lebt, wird nachgesehen, nicht
-  geschlussfolgert.** Ein Agent kommt nicht heran — also fragen.
-  Die Kehrseite von `true` ist ein **verriegelbarer** Branch: greift die Protection
-  einmal ins Leere, kann niemand sie von innen öffnen. Der Ausweg steht unten unter
-  **„Notausgang: `enforce_admins` temporär lösen"** — dort verifiziert, nicht vermutet.
-  *(Beobachtet, 20.08.)*
-
 - **Ein Schritt, der besteht, weil er nichts prüft.** Der `vitest`-Step im unit-Job läuft
   mit `--passWithNoTests`, und es gibt **keine Testdatei — und gab nie eine.** (Zwei
   git-log-Instrumente über alle Commits, beide leer; dieselben Instrumente mit `*.sh`
@@ -1024,7 +921,7 @@ braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den 
     bis zum 28.08. das Gegenteil.
   - **Der Job heißt „Unit & Typecheck" und macht weder das eine noch das andere.** Ein
     `tsconfig.json` oder ein `tsc`-Aufruf hat in diesem Repo nie existiert. **Der Name
-    bleibt trotzdem** — er ist required status check, siehe „Notausgang". Der Widerspruch
+    bleibt trotzdem** — er ist required status check, siehe „Notausgang" in `AGENTS.private.md`. Der Widerspruch
     ist in `ci.yml` an Ort und Stelle vermerkt, damit ihn niemand für einen Defekt hält
     und „repariert".
 
@@ -1035,70 +932,6 @@ braucht ein echtes `gk_`-Token und bleibt manuell. Dort ersetzt der Verweis den 
   *(Beobachtet 28.08.2026, aufgefallen bei der §17a/§18b-Übertragung.)*
 
 - ⚠️ TODO — erweitern, sobald der Golden Master das erste Mal etwas Unerwartetes fängt.
-
----
-
-## Notausgang: `enforce_admins` temporär lösen
-
-`main` ist mit `enforce_admins: true` geschützt — die Regel gilt **auch für Admins** und
-damit auch für Chris (§3). Das ist gewollt und die eigentliche Härte des Schutzes. Es
-heißt aber auch: gerät die Branch Protection einmal in einen Zustand, aus dem heraus kein
-PR mehr mergebar ist, ist der Branch **verriegelt** und niemand kann ihn von innen öffnen.
-
-⚠️ **Hier ist der Fall konkret, nicht theoretisch** — er hängt an zwei Zeilen:
-
-```
-enforce_admins   true
-strict           true
-contexts         ["Probe (Preview)", "Unit & Typecheck"]
-```
-
-Diese beiden Contexts sind **wörtlich die `name:`-Werte der Jobs** in
-`.github/workflows/ci.yml` (`Unit & Typecheck`, `Probe (Preview)`). **Wer einen der beiden
-Jobs umbenennt, verriegelt `main`**: der required context berichtet nie wieder, der PR
-wird nie mergebar — und der PR, der die Umbenennung zurücknähme, ist selbst blockiert.
-Ein `required_status_check`, der nie berichtet, ist der Regelfall dieser Falle. `strict:
-true` steht ebenfalls, PRs müssen also zusätzlich auf dem Stand von `main` sein.
-
-**Kein Verriegelungsrisiko dagegen aus dem übersprungenen `probe`.** Der Job **läuft
-immer**; nur seine Steps hängen an `steps.wait.outputs.skip`. Er berichtet deshalb auch
-bei Doc-only-PRs, für die Workers Builds keinen Build erzeugt. *(Nachgesehen, 24.08.)*
-
-Der Ausweg ist zwei Kommandos weit. Sie stehen hier, damit im Ernstfall niemand unter
-Druck herumprobiert:
-
-```bash
-R=repos/growthkit-tools/mcp/branches/main/protection
-
-gh api -X DELETE $R/enforce_admins       # lösen
-gh api -X POST   $R/enforce_admins       # zurücksetzen
-gh api $R/enforce_admins --jq .enabled   # prüfen: true / false
-```
-
-⚠️ **Beide Kommandos gehören in denselben Arbeitsgang.** Kein Lösen „bis morgen", kein
-Lösen mit der Absicht, es später zurückzusetzen. Zwischen den beiden Aufrufen ist `main`
-für Admins ungeschützt, und der einzige verlässliche Zeitpunkt für das Zurücksetzen ist
-**sofort**. Wer löst, setzt im selben Befehl zurück — sonst bleibt es offen, und niemand
-merkt es, weil nichts fehlschlägt.
-
-⚠️ **Der Notausgang läuft über den `gh`-OAuth-Token, NICHT über das fine-grained PAT** in
-`~/.config/growthkit/gh-workflow-token`. Dessen `Administration`-Recht steht seit dem
-24.08.2026 auf **Read** — damit scheitert der `DELETE`, und zwar an einer Stelle, an der
-gerade niemand Zeit zum Debuggen hat. Also **kein `GH_TOKEN=…`-Präfix** vor diesen
-Kommandos; das PAT ist für Pushes auf `.github/workflows/*` da, nicht hierfür.
-
-**Verifiziert am 24.08.2026 in diesem Repo**, Rundweg in einem Arbeitsgang:
-`true → false → true`. Entscheidend war der **vollständige** Vorher-/Nachher-Dump der
-Protection, nicht nur `enforce_admins`: der Diff ist **leer**. `DELETE` auf diesem
-Unterpfad rührt also weder `required_status_checks` noch `strict` noch die beiden
-Contexts an — was hier mehr zählt als in den Nachbar-Repos, weil hier mehr daran hängt.
-Ein ungeprüftes Notfallkommando ist kein Notausgang, sondern eine Vermutung.
-
-⚠️ **Vor dem `DELETE` das Wiederherstellungs-Kommando bereitlegen, nicht danach.** Räumt
-`DELETE` wider Erwarten mehr ab, ist `main` bereits beschädigt — Melden reicht dann nicht.
-Bereitliegen muss ein `PATCH` auf `$R/required_status_checks` mit `strict: true` und
-beiden Contexts, ersatzweise ein `PUT` auf `$R` mit der gesamten Konfiguration aus dem
-Vorher-Dump.
 
 ---
 
@@ -1159,11 +992,6 @@ Vorher-Dump.
   es gibt **zwei** Protokollversionen mit 2026er-Datum, die ext-apps-Version und die
   Kernrevision, und sie dürfen nie angeglichen werden.
 
-- **HMAC-Nonce-Härtung für `place_call`:** signierte Nonce, eingebettet ins
-  `resources/read`-Card-HTML, serverseitig verifiziert — macht einen gefälschten direkten
-  `place_call` unmöglich. Absichtlich zurückgestellt; nur bei konkretem Compliance- oder
-  Trust-Center-Bedarf bauen. Die aktuelle App-Private-Lösung erfüllt UWG § 7 bereits.
-
 ---
 
 ## Abgleich mit den Nachbar-Repos
@@ -1184,7 +1012,7 @@ ist die Liste der Übertragungen — und der Grund, aus dem es ihn gibt: der Rü
 | Guard-Verengung (`seg_is_push` / `PUSH_SEGS`) | `growthkit-website` PR #8 | hier PR #23 · `supabase` PR #16 |
 | §7a | **hier** (PR #23) | `supabase` PR #19 · `growthkit-website` PR #9 |
 | §7a-Ausnahme-Absatz | `growthkit-website` | hier PR #24 · in `supabase` |
-| Notausgang `enforce_admins` | `growthkit-website` | hier PR #24 · in `supabase` |
+| Notausgang `enforce_admins` | `growthkit-website` | hier PR #24, seit 29.09.2026 in `AGENTS.private.md` · in `supabase` |
 
 **Offen — Stand 30.08.2026, um die letzte Zeile am 01.09.2026 ergänzt (nur diese neu
 nachgesehen, die darüber unverändert übernommen):**
