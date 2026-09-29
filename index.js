@@ -5106,11 +5106,16 @@ if (name === "getChapterOverview") {
         if (!Array.isArray(tokenRows) || !tokenRows.length) return json({ error: "invalid_grant" }, 400);
         const storedToken = tokenRows[0];
         if (Number(storedToken.refresh_expires_at) < Date.now()) return json({ error: "invalid_grant" }, 400);
-        // Der Refresh-Token gehoert dem Client, dem er ausgestellt wurde.
-        if (storedToken.client_id !== client_id) {
-          console.log(`[token] refresh rejected reason=${client_id ? "client_mismatch" : "client_missing"}`);
+        // Der Refresh-Token gehoert dem Client, dem er ausgestellt wurde. Schickt
+        // der Client seine client_id mit, muss sie passen. Fehlt sie, bleibt der
+        // Refresh erlaubt: ob die verbreiteten Clients sie beim Refresh senden,
+        // ist nicht belegt, und eine Ablehnung hiesse fuer sie stuendlich neu
+        // verbinden. Geloggt wird es, damit sichtbar wird, wer sie nicht schickt.
+        if (client_id && storedToken.client_id !== client_id) {
+          console.log("[token] refresh rejected reason=client_mismatch");
           return json({ error: "invalid_grant" }, 400);
         }
+        if (!client_id) console.log(`[token] refresh client_missing token_client=${String(storedToken.client_id || "").slice(0, 64)}`);
 
         const new_access_token = crypto.randomUUID();
         // Wie beim DELETE oben: geschrieben wird ueber oauth_tokens.id aus dem
